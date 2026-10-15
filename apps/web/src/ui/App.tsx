@@ -36,7 +36,7 @@ export const App: React.FC = () => {
   }, []);
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100vw', height: '100dvh', overflow: 'hidden' }}>
       <canvas
         ref={canvasRef}
         style={{

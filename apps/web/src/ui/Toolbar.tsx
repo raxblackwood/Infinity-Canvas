@@ -48,7 +48,7 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
         <div
           style={{
             position: 'absolute',
-            bottom: 84,
+            bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))',
             left: '50%',
             transform: 'translateX(-50%)',
             backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -87,7 +87,7 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
         <div
           style={{
             position: 'absolute',
-            bottom: 84,
+            bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))',
             left: '50%',
             transform: 'translateX(-50%)',
             backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -140,7 +140,7 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
       <div
         style={{
           position: 'absolute',
-          bottom: 16,
+          bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
           left: '50%',
           transform: 'translateX(-50%)',
           backgroundColor: 'rgba(255, 255, 255, 0.92)',
