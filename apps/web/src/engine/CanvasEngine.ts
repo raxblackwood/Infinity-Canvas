@@ -2,16 +2,20 @@ import { Camera } from './Camera.js';
 import { CanvasRenderer, PerformanceStats } from './CanvasRenderer.js';
 import { PointerCapture, InteractionMode } from './PointerCapture.js';
 import { StoredStroke } from './SpatialIndex.js';
+import { NetworkClient } from './NetworkClient.js';
+import { encodeStroke } from '@infinite-canvas/shared';
 
 export interface CanvasEngineCallbacks {
   onStatsUpdate?: (stats: PerformanceStats) => void;
   onStrokeCommitted?: (stroke: StoredStroke) => void;
+  onConnectionChange?: (connected: boolean) => void;
 }
 
 export class CanvasEngine {
   readonly camera: Camera;
   readonly renderer: CanvasRenderer;
   readonly pointer: PointerCapture;
+  readonly network: NetworkClient;
 
   private rafId: number | null = null;
   private isRunning = false;
@@ -26,12 +30,25 @@ export class CanvasEngine {
 
     this.camera = new Camera();
     this.renderer = new CanvasRenderer(canvas, this.camera, Boolean(isMobile));
+    this.network = new NetworkClient(this);
+    this.network.onConnectionChange = (connected) => {
+      this.callbacks.onConnectionChange?.(connected);
+    };
+    this.renderer.remoteLiveStrokesProvider = () => this.network.getRemoteLiveStrokes();
+
     this.pointer = new PointerCapture(canvas, this.camera, this.renderer, {
       onStrokeCommitted: (stroke) => {
+        try {
+          const strokeBytes = encodeStroke(stroke.colorIndex, stroke.widthIndex, stroke.points);
+          this.network.sendStrokeCommit(stroke.id, stroke.tileX, stroke.tileY, strokeBytes);
+        } catch (err) {
+          console.error('Failed to encode stroke for network commit:', err);
+        }
         this.callbacks.onStrokeCommitted?.(stroke);
       },
       onCameraChanged: () => {
         this.renderer.markDirty();
+        this.network.syncVisibleTiles();
       },
     });
 

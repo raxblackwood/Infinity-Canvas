@@ -1,0 +1,31 @@
+{
+  "name": "@infinite-canvas/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@infinite-canvas/shared": "workspace:*",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.27.0",
+    "pg": "^8.11.5",
+    "pino": "^9.1.2",
+    "pino-pretty": "^11.1.0",
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/pg": "^8.11.6",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.10.5",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

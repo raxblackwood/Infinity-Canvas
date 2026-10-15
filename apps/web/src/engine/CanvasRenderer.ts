@@ -67,6 +67,14 @@ export class CanvasRenderer {
     points: { x: number; y: number }[];
   } | null = null;
 
+  public remoteLiveStrokesProvider?: () => {
+    tileX: number;
+    tileY: number;
+    colorIndex: number;
+    widthIndex: number;
+    points: { x: number; y: number }[];
+  }[];
+
   constructor(canvas: HTMLCanvasElement, camera: Camera, isMobile = false) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false })!;
@@ -175,6 +183,16 @@ export class CanvasRenderer {
     // Render live in-progress stroke on top
     if (this.activeLiveStroke && this.activeLiveStroke.points.length > 0) {
       this.renderLiveStroke(this.activeLiveStroke);
+    }
+
+    // Render remote peer live strokes
+    if (this.remoteLiveStrokesProvider) {
+      const remotes = this.remoteLiveStrokesProvider();
+      for (const remote of remotes) {
+        if (remote.points.length > 0) {
+          this.renderLiveStroke(remote);
+        }
+      }
     }
 
     const frameEnd = performance.now();

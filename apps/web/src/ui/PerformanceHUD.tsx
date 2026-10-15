@@ -12,6 +12,7 @@ export const PerformanceHUD: React.FC<Props> = ({ stats, engine }) => {
   const [isStressRunning, setIsStressRunning] = useState(false);
   const [stressProgress, setStressProgress] = useState(0);
   const [stressReport, setStressReport] = useState<string | null>(null);
+  const [showPhoneQr, setShowPhoneQr] = useState(false);
 
   useEffect(() => {
     setDpr(window.devicePixelRatio || 1);
@@ -280,6 +281,38 @@ export const PerformanceHUD: React.FC<Props> = ({ stats, engine }) => {
         >
           {isStressRunning ? `Stress: ${stressProgress}%` : '2-Min Pan Stress'}
         </button>
+      </div>
+
+      <div style={{ marginTop: 6, borderTop: '1px solid #E0E0E0', paddingTop: 6 }}>
+        <button
+          onClick={() => setShowPhoneQr(!showPhoneQr)}
+          style={{
+            width: '100%',
+            fontSize: 11,
+            padding: '5px',
+            borderRadius: 6,
+            backgroundColor: '#E8EAF6',
+            color: '#283593',
+            border: '1px solid #C5CAE9',
+            cursor: 'pointer',
+            fontWeight: 600,
+          }}
+        >
+          {showPhoneQr ? 'Hide Phone QR' : '📱 Scan to Open on Phone'}
+        </button>
+        {showPhoneQr && (
+          <div style={{ marginTop: 8, textAlign: 'center' }}>
+            <img
+              src="https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=https://knit-nut-mere-performing.trycloudflare.com"
+              alt="Scan QR"
+              style={{ width: 140, height: 140, borderRadius: 8, border: '1px solid #ddd' }}
+            />
+            <div style={{ fontSize: 11, marginTop: 4, color: '#333', wordBreak: 'break-all' }}>
+              <strong>https://knit-nut-mere-performing.trycloudflare.com</strong>
+            </div>
+            <div style={{ fontSize: 10, color: '#666' }}>Works on Wi-Fi or Mobile Data (No password)</div>
+          </div>
+        )}
       </div>
 
       {stressReport && (
