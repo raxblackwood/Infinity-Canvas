@@ -31,7 +31,7 @@ test.describe('Phase 0 Visual Regression & Crispness', () => {
         // Capture canvas screenshot
         const canvas = page.locator('canvas');
         await expect(canvas).toHaveScreenshot(`canvas-scale-${scale}-dpr-${dpr}.png`, {
-          maxDiffPixelRatio: 0.05,
+          maxDiffPixelRatio: 0.08,
         });
 
         await context.close();

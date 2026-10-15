@@ -3,7 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -11,6 +18,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1151.0",
     "@fastify/cors": "^9.0.1",
     "@infinite-canvas/shared": "workspace:*",
     "dotenv": "^16.4.5",

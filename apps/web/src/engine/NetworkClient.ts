@@ -14,6 +14,7 @@ import {
   decodeServerStrokeReject,
   decodeServerStrokesHidden,
   decodeStroke,
+  decodeTileSnapshot,
   TileSubEntry,
   LocalPoint,
   ServerWelcome,
@@ -236,7 +237,9 @@ export class NetworkClient {
     }
   }
 
-  syncVisibleTiles(): void {
+  private checkedTileSnapshots: Set<string> = new Set();
+
+  async syncVisibleTiles(): Promise<void> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     // Determine current visible tiles
@@ -250,21 +253,106 @@ export class NetworkClient {
     const minTy = Math.floor(cam.tileY + cam.offsetY - halfH / cam.scale);
     const maxTy = Math.floor(cam.tileY + cam.offsetY + halfH / cam.scale);
 
-    const subs: TileSubEntry[] = [];
+    const neededTiles: { tileX: number; tileY: number }[] = [];
     for (let ty = minTy; ty <= maxTy; ty++) {
       for (let tx = minTx; tx <= maxTx; tx++) {
-        const key = `${tx},${ty}`;
-        const since = this.tileMaxStrokeIds.get(key) || 0;
-        subs.push({
-          tileX: tx,
-          tileY: ty,
-          sinceStrokeId: since,
-          live: true,
-        });
+        neededTiles.push({ tileX: tx, tileY: ty });
       }
     }
 
-    if (subs.length > 0) {
+    if (neededTiles.length === 0) return;
+
+    // Check which tiles need snapshot indexing
+    const unindexedTiles = neededTiles.filter(
+      (t) => !this.checkedTileSnapshots.has(`${t.tileX},${t.tileY}`)
+    );
+
+    if (unindexedTiles.length > 0) {
+      try {
+        const res = await fetch('/api/tile-index', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(unindexedTiles.slice(0, 64)),
+        });
+
+        if (res.ok) {
+          const indexList: {
+            tileX: number;
+            tileY: number;
+            snapshotVersion: number;
+            snapshotUrl: string | null;
+            maxStrokeId: number;
+            strokeCount: number;
+            frozen: boolean;
+          }[] = await res.json();
+
+          for (const item of indexList) {
+            const key = `${item.tileX},${item.tileY}`;
+            this.checkedTileSnapshots.add(key);
+
+            if (item.snapshotUrl) {
+              try {
+                const snapRes = await fetch(item.snapshotUrl);
+                if (snapRes.ok) {
+                  const snapBuf = new Uint8Array(await snapRes.arrayBuffer());
+                  const snapshot = decodeTileSnapshot(snapBuf);
+
+                  for (const strokeItem of snapshot.strokes) {
+                    try {
+                      const decoded = decodeStroke(strokeItem.data);
+                      let minX = decoded.points[0].x;
+                      let minY = decoded.points[0].y;
+                      let maxX = decoded.points[0].x;
+                      let maxY = decoded.points[0].y;
+                      for (const pt of decoded.points) {
+                        if (pt.x < minX) minX = pt.x;
+                        if (pt.y < minY) minY = pt.y;
+                        if (pt.x > maxX) maxX = pt.x;
+                        if (pt.y > maxY) maxY = pt.y;
+                      }
+
+                      this.engine.renderer.addStroke({
+                        id: strokeItem.id,
+                        tileX: item.tileX,
+                        tileY: item.tileY,
+                        colorIndex: decoded.colorIndex,
+                        widthIndex: decoded.widthIndex,
+                        points: decoded.points,
+                        minX,
+                        minY,
+                        maxX,
+                        maxY,
+                      });
+                    } catch {}
+                  }
+
+                  this.tileMaxStrokeIds.set(key, snapshot.maxStrokeId);
+                  this.engine.renderer.markDirty();
+                }
+              } catch (e) {
+                console.warn('Failed to load snapshot for tile', key, e);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch tile index:', err);
+      }
+    }
+
+    const subs: TileSubEntry[] = [];
+    for (const t of neededTiles) {
+      const key = `${t.tileX},${t.tileY}`;
+      const since = this.tileMaxStrokeIds.get(key) || 0;
+      subs.push({
+        tileX: t.tileX,
+        tileY: t.tileY,
+        sinceStrokeId: since,
+        live: true,
+      });
+    }
+
+    if (subs.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(encodeClientSubscribe(subs));
     }
   }

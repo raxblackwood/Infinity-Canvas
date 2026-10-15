@@ -33,10 +33,22 @@ export interface StrokeRecord {
   data: Uint8Array;
 }
 
+export interface BakeJobRecord {
+  id: number;
+  kind: string; // 'snapshot' | 'raster_level_0' | 'raster_parent'
+  tileX: number;
+  tileY: number;
+  level: number;
+  runAfter: Date;
+  attempts: number;
+  lockedAt: Date | null;
+}
+
 export interface Storage {
   findOrCreateUser(tokenHash: Buffer): Promise<UserRecord>;
   getUserByTokenHash(tokenHash: Buffer): Promise<UserRecord | null>;
   getTile(tileX: number, tileY: number): Promise<TileRecord>;
+  getTileIndex(tiles: { tileX: number; tileY: number }[]): Promise<TileRecord[]>;
   saveStroke(
     tileX: number,
     tileY: number,
@@ -44,7 +56,20 @@ export interface Storage {
     data: Uint8Array
   ): Promise<{ id: number; strokeCount: number; frozen: boolean }>;
   getStrokesSince(tileX: number, tileY: number, sinceStrokeId: number): Promise<{ id: number; data: Uint8Array }[]>;
+  getVisibleStrokesForTile(tileX: number, tileY: number): Promise<{ id: number; data: Uint8Array }[]>;
+  updateTileSnapshot(tileX: number, tileY: number, version: number, key: string, maxStrokeId: number): Promise<void>;
   undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number } | null>;
+
+  // Bake job queue (SPEC Section 6 & 9)
+  enqueueBakeJob(kind: string, tileX: number, tileY: number, level?: number, runAfter?: Date): Promise<number>;
+  claimBakeJob(): Promise<BakeJobRecord | null>;
+  completeBakeJob(jobId: number): Promise<void>;
+  failBakeJob(jobId: number, retryInMs?: number): Promise<void>;
+
+  // Raster tiles (SPEC Section 6)
+  saveRasterTile(level: number, x: number, y: number, version: number, key: string): Promise<void>;
+  getRasterTile(level: number, x: number, y: number): Promise<{ version: number; key: string } | null>;
+
   close(): Promise<void>;
 }
 
@@ -57,6 +82,9 @@ export class InMemoryStorage implements Storage {
   private tiles: Map<string, TileRecord> = new Map(); // "tx,ty" -> tile
   private strokes: StrokeRecord[] = [];
   private nextStrokeId = 1;
+  private bakeJobs: BakeJobRecord[] = [];
+  private nextBakeJobId = 1;
+  private rasterTiles: Map<string, { version: number; key: string }> = new Map(); // "level,x,y" -> data
 
   async findOrCreateUser(tokenHash: Buffer): Promise<UserRecord> {
     const key = tokenHash.toString('hex');
@@ -108,6 +136,14 @@ export class InMemoryStorage implements Storage {
     return tile;
   }
 
+  async getTileIndex(tiles: { tileX: number; tileY: number }[]): Promise<TileRecord[]> {
+    const results: TileRecord[] = [];
+    for (const t of tiles) {
+      results.push(await this.getTile(t.tileX, t.tileY));
+    }
+    return results;
+  }
+
   async saveStroke(
     tileX: number,
     tileY: number,
@@ -141,6 +177,9 @@ export class InMemoryStorage implements Storage {
       tile.frozen = true;
     }
 
+    // Enqueue snapshot bake job (debounced by 5s, SPEC Section 9)
+    await this.enqueueBakeJob('snapshot', tileX, tileY, 0, new Date(now.getTime() + 5000));
+
     return { id: strokeId, strokeCount: tile.strokeCount, frozen: tile.frozen };
   }
 
@@ -152,6 +191,30 @@ export class InMemoryStorage implements Storage {
       }
     }
     return results;
+  }
+
+  async getVisibleStrokesForTile(tileX: number, tileY: number): Promise<{ id: number; data: Uint8Array }[]> {
+    const results: { id: number; data: Uint8Array }[] = [];
+    for (const s of this.strokes) {
+      if (s.tileX === tileX && s.tileY === tileY && s.status === 0) {
+        results.push({ id: s.id, data: s.data });
+      }
+    }
+    return results.sort((a, b) => a.id - b.id);
+  }
+
+  async updateTileSnapshot(
+    tileX: number,
+    tileY: number,
+    version: number,
+    key: string,
+    maxStrokeId: number
+  ): Promise<void> {
+    const tile = await this.getTile(tileX, tileY);
+    tile.snapshotVersion = version;
+    tile.snapshotKey = key;
+    tile.maxStrokeId = maxStrokeId;
+    tile.dirtySince = null;
   }
 
   async undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number } | null> {
@@ -167,6 +230,72 @@ export class InMemoryStorage implements Storage {
       }
     }
     return null;
+  }
+
+  async enqueueBakeJob(
+    kind: string,
+    tileX: number,
+    tileY: number,
+    level = 0,
+    runAfter: Date = new Date()
+  ): Promise<number> {
+    // If an unlocked pending job of the same kind, tile, and level exists, update its runAfter
+    const existing = this.bakeJobs.find(
+      (j) => j.kind === kind && j.tileX === tileX && j.tileY === tileY && j.level === level && !j.lockedAt
+    );
+    if (existing) {
+      existing.runAfter = runAfter;
+      return existing.id;
+    }
+
+    const id = this.nextBakeJobId++;
+    this.bakeJobs.push({
+      id,
+      kind,
+      tileX,
+      tileY,
+      level,
+      runAfter,
+      attempts: 0,
+      lockedAt: null,
+    });
+    return id;
+  }
+
+  async claimBakeJob(): Promise<BakeJobRecord | null> {
+    const now = new Date();
+    const candidate = this.bakeJobs
+      .filter((j) => !j.lockedAt && j.runAfter <= now && j.attempts < 5)
+      .sort((a, b) => a.runAfter.getTime() - b.runAfter.getTime())[0];
+
+    if (!candidate) return null;
+    candidate.lockedAt = now;
+    candidate.attempts++;
+    return { ...candidate };
+  }
+
+  async completeBakeJob(jobId: number): Promise<void> {
+    const idx = this.bakeJobs.findIndex((j) => j.id === jobId);
+    if (idx !== -1) {
+      this.bakeJobs.splice(idx, 1);
+    }
+  }
+
+  async failBakeJob(jobId: number, retryInMs = 5000): Promise<void> {
+    const job = this.bakeJobs.find((j) => j.id === jobId);
+    if (job) {
+      job.lockedAt = null;
+      job.runAfter = new Date(Date.now() + retryInMs);
+    }
+  }
+
+  async saveRasterTile(level: number, x: number, y: number, version: number, key: string): Promise<void> {
+    this.rasterTiles.set(`${level},${x},${y}`, { version, key });
+  }
+
+  async getRasterTile(level: number, x: number, y: number): Promise<{ version: number; key: string } | null> {
+    const item = this.rasterTiles.get(`${level},${x},${y}`);
+    return item ? { ...item } : null;
   }
 
   async close(): Promise<void> {}
@@ -212,14 +341,36 @@ export class PostgresStorage implements Storage {
           id BIGSERIAL PRIMARY KEY,
           tile_x INT NOT NULL,
           tile_y INT NOT NULL,
-          user_id UUID NOT NULL,
+          user_id UUID NOT NULL REFERENCES users(id),
           created_at TIMESTAMPTZ NOT NULL,
           status SMALLINT DEFAULT 0,
           data BYTEA NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS raster_tiles (
+          level SMALLINT NOT NULL,
+          x INT NOT NULL,
+          y INT NOT NULL,
+          version INT NOT NULL DEFAULT 1,
+          key TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (level, x, y)
+        );
+
+        CREATE TABLE IF NOT EXISTS bake_jobs (
+          id BIGSERIAL PRIMARY KEY,
+          kind TEXT NOT NULL,
+          tile_x INT NOT NULL,
+          tile_y INT NOT NULL,
+          level SMALLINT DEFAULT 0,
+          run_after TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          attempts INT NOT NULL DEFAULT 0,
+          locked_at TIMESTAMPTZ
+        );
+
         CREATE INDEX IF NOT EXISTS idx_strokes_tile_id ON strokes (tile_x, tile_y, id);
         CREATE INDEX IF NOT EXISTS idx_strokes_user_created ON strokes (user_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_bake_jobs_claim ON bake_jobs (run_after, attempts) WHERE locked_at IS NULL;
       `);
     } finally {
       client.release();
@@ -227,13 +378,18 @@ export class PostgresStorage implements Storage {
   }
 
   async findOrCreateUser(tokenHash: Buffer): Promise<UserRecord> {
+    const existing = await this.getUserByTokenHash(tokenHash);
+    if (existing) {
+      await this.pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = $1', [existing.id]);
+      return existing;
+    }
+
+    const id = crypto.randomUUID();
     const res = await this.pool.query(
-      `INSERT INTO users (id, token_hash, created_at, last_seen_at)
-       VALUES ($1, $2, NOW(), NOW())
-       ON CONFLICT (token_hash) DO UPDATE
-       SET last_seen_at = NOW()
+      `INSERT INTO users (id, token_hash, created_at, last_seen_at, trust, banned, rules_version)
+       VALUES ($1, $2, NOW(), NOW(), 0, false, 0)
        RETURNING id, token_hash, created_at, last_seen_at, trust, banned, rules_version`,
-      [crypto.randomUUID(), tokenHash]
+      [id, tokenHash]
     );
     const row = res.rows[0];
     return {
@@ -288,6 +444,54 @@ export class PostgresStorage implements Storage {
     };
   }
 
+  async getTileIndex(tiles: { tileX: number; tileY: number }[]): Promise<TileRecord[]> {
+    if (tiles.length === 0) return [];
+    const values: any[] = [];
+    const clauses: string[] = [];
+
+    tiles.forEach((t, i) => {
+      values.push(t.tileX, t.tileY);
+      clauses.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
+    });
+
+    const res = await this.pool.query(
+      `SELECT tile_x, tile_y, stroke_count, frozen, snapshot_version, snapshot_key, max_stroke_id, dirty_since
+       FROM tiles
+       WHERE (tile_x, tile_y) IN (${clauses.join(', ')})`,
+      values
+    );
+
+    const map = new Map<string, TileRecord>();
+    for (const row of res.rows) {
+      map.set(`${row.tile_x},${row.tile_y}`, {
+        tileX: row.tile_x,
+        tileY: row.tile_y,
+        strokeCount: row.stroke_count,
+        frozen: row.frozen,
+        snapshotVersion: row.snapshot_version,
+        snapshotKey: row.snapshot_key,
+        maxStrokeId: Number(row.max_stroke_id),
+        dirtySince: row.dirty_since,
+      });
+    }
+
+    // Return records in order, with empty defaults for any tile not yet stored
+    return tiles.map((t) => {
+      const existing = map.get(`${t.tileX},${t.tileY}`);
+      if (existing) return existing;
+      return {
+        tileX: t.tileX,
+        tileY: t.tileY,
+        strokeCount: 0,
+        frozen: false,
+        snapshotVersion: 0,
+        snapshotKey: null,
+        maxStrokeId: 0,
+        dirtySince: null,
+      };
+    });
+  }
+
   async saveStroke(
     tileX: number,
     tileY: number,
@@ -329,6 +533,13 @@ export class PostgresStorage implements Storage {
         [tileX, tileY, strokeId]
       );
 
+      // Enqueue bake job (SPEC Section 9)
+      await client.query(
+        `INSERT INTO bake_jobs (kind, tile_x, tile_y, level, run_after)
+         VALUES ('snapshot', $1, $2, 0, NOW() + INTERVAL '5 seconds')`,
+        [tileX, tileY]
+      );
+
       await client.query('COMMIT');
       return {
         id: strokeId,
@@ -354,6 +565,34 @@ export class PostgresStorage implements Storage {
       id: Number(r.id),
       data: new Uint8Array(r.data),
     }));
+  }
+
+  async getVisibleStrokesForTile(tileX: number, tileY: number): Promise<{ id: number; data: Uint8Array }[]> {
+    const res = await this.pool.query(
+      `SELECT id, data FROM strokes
+       WHERE tile_x = $1 AND tile_y = $2 AND status = 0
+       ORDER BY id ASC`,
+      [tileX, tileY]
+    );
+    return res.rows.map((r) => ({
+      id: Number(r.id),
+      data: new Uint8Array(r.data),
+    }));
+  }
+
+  async updateTileSnapshot(
+    tileX: number,
+    tileY: number,
+    version: number,
+    key: string,
+    maxStrokeId: number
+  ): Promise<void> {
+    await this.pool.query(
+      `UPDATE tiles
+       SET snapshot_version = $1, snapshot_key = $2, max_stroke_id = $3, dirty_since = NULL
+       WHERE tile_x = $4 AND tile_y = $5`,
+      [version, key, maxStrokeId, tileX, tileY]
+    );
   }
 
   async undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number } | null> {
@@ -395,6 +634,94 @@ export class PostgresStorage implements Storage {
     }
   }
 
+  async enqueueBakeJob(
+    kind: string,
+    tileX: number,
+    tileY: number,
+    level = 0,
+    runAfter: Date = new Date()
+  ): Promise<number> {
+    const res = await this.pool.query(
+      `INSERT INTO bake_jobs (kind, tile_x, tile_y, level, run_after)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [kind, tileX, tileY, level, runAfter]
+    );
+    return Number(res.rows[0].id);
+  }
+
+  async claimBakeJob(): Promise<BakeJobRecord | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const claimRes = await client.query(
+        `UPDATE bake_jobs
+         SET locked_at = NOW(), attempts = attempts + 1
+         WHERE id = (
+           SELECT id FROM bake_jobs
+           WHERE run_after <= NOW() AND locked_at IS NULL AND attempts < 5
+           ORDER BY run_after ASC
+           LIMIT 1
+           FOR UPDATE SKIP LOCKED
+         )
+         RETURNING id, kind, tile_x, tile_y, level, run_after, attempts, locked_at`
+      );
+      await client.query('COMMIT');
+      if (claimRes.rows.length === 0) return null;
+      const r = claimRes.rows[0];
+      return {
+        id: Number(r.id),
+        kind: r.kind,
+        tileX: r.tile_x,
+        tileY: r.tile_y,
+        level: r.level,
+        runAfter: r.run_after,
+        attempts: r.attempts,
+        lockedAt: r.locked_at,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async completeBakeJob(jobId: number): Promise<void> {
+    await this.pool.query('DELETE FROM bake_jobs WHERE id = $1', [jobId]);
+  }
+
+  async failBakeJob(jobId: number, retryInMs = 5000): Promise<void> {
+    await this.pool.query(
+      `UPDATE bake_jobs
+       SET locked_at = NULL, run_after = NOW() + ($2 || ' milliseconds')::interval
+       WHERE id = $1`,
+      [jobId, retryInMs]
+    );
+  }
+
+  async saveRasterTile(level: number, x: number, y: number, version: number, key: string): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO raster_tiles (level, x, y, version, key, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (level, x, y) DO UPDATE
+       SET version = $4, key = $5, created_at = NOW()`,
+      [level, x, y, version, key]
+    );
+  }
+
+  async getRasterTile(level: number, x: number, y: number): Promise<{ version: number; key: string } | null> {
+    const res = await this.pool.query(
+      `SELECT version, key FROM raster_tiles WHERE level = $1 AND x = $2 AND y = $3`,
+      [level, x, y]
+    );
+    if (res.rows.length === 0) return null;
+    return {
+      version: res.rows[0].version,
+      key: res.rows[0].key,
+    };
+  }
+
   async close(): Promise<void> {
     await this.pool.end();
   }
@@ -403,12 +730,22 @@ export class PostgresStorage implements Storage {
 /**
  * Creates storage instance based on environment.
  */
+let sharedStorageInstance: Storage | null = null;
+
 export async function createStorage(): Promise<Storage> {
+  if (sharedStorageInstance) return sharedStorageInstance;
+
   const dbUrl = process.env.DATABASE_URL;
   if (dbUrl) {
     const storage = new PostgresStorage(dbUrl);
     await storage.initSchema();
-    return storage;
+    sharedStorageInstance = storage;
+  } else {
+    sharedStorageInstance = new InMemoryStorage();
   }
-  return new InMemoryStorage();
+  return sharedStorageInstance;
+}
+
+export function setSharedStorage(storage: Storage): void {
+  sharedStorageInstance = storage;
 }

@@ -17,6 +17,7 @@ import {
 import { Camera } from './Camera.js';
 import { TileSpatialIndex, StoredStroke } from './SpatialIndex.js';
 import { RenderCellCache, CachedCell } from './RenderCellCache.js';
+import { RasterTileCache } from './RasterCache.js';
 
 export interface PerformanceStats {
   fps: number;
@@ -33,6 +34,7 @@ export class CanvasRenderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly camera: Camera;
   private readonly cellCache: RenderCellCache;
+  private readonly rasterCache: RasterTileCache;
   private readonly tileIndices: Map<string, TileSpatialIndex> = new Map();
 
   private dpr = 1;
@@ -43,6 +45,8 @@ export class CanvasRenderer {
   private activeZq: number | null = null;
   private targetZq: number | null = null;
   private settleTimeout: number | null = null;
+  private prevScale: number = DEFAULT_SCALE;
+  private crossfadeState: { startTime: number; direction: 'toRaster' | 'toVector' } | null = null;
 
   // Performance tracking
   private lastFrameTimestamp = performance.now();
@@ -80,6 +84,7 @@ export class CanvasRenderer {
     this.ctx = canvas.getContext('2d', { alpha: false })!;
     this.camera = camera;
     this.cellCache = new RenderCellCache(isMobile);
+    this.rasterCache = new RasterTileCache({ onTileLoaded: () => this.markDirty() });
     this.updateViewport();
   }
 
@@ -173,11 +178,43 @@ export class CanvasRenderer {
 
     let visibleCellsCount = 0;
 
-    // Amendment 1: Below VECTOR_MIN_SCALE (512), no render cells until Phase 2 raster pyramid
-    if (this.camera.scale < VECTOR_MIN_SCALE || zqToRender === null || zqToRender < 9) {
-      this.renderLowZoomPlaceholder();
+    const isRaster = this.camera.scale < VECTOR_MIN_SCALE;
+    const wasRaster = this.prevScale < VECTOR_MIN_SCALE;
+
+    if (isRaster && !wasRaster) {
+      this.crossfadeState = { startTime: performance.now(), direction: 'toRaster' };
+    } else if (!isRaster && wasRaster) {
+      this.crossfadeState = { startTime: performance.now(), direction: 'toVector' };
+    }
+    this.prevScale = this.camera.scale;
+
+    if (this.crossfadeState) {
+      const elapsed = performance.now() - this.crossfadeState.startTime;
+      const t = Math.min(1, elapsed / 150);
+      const ease = 1 - Math.pow(1 - t, 2);
+      const rasterAlpha = this.crossfadeState.direction === 'toRaster' ? ease : 1 - ease;
+      const vectorAlpha = this.crossfadeState.direction === 'toRaster' ? 1 - ease : ease;
+
+      const k = Math.max(0, Math.min(12, Math.floor(Math.log2(1024 / (this.camera.scale * this.dpr)))));
+      this.renderRasterTiles(k, rasterAlpha);
+
+      if (zqToRender !== null && zqToRender >= 9) {
+        visibleCellsCount = this.renderVectorCells(zqToRender, vectorAlpha);
+      }
+
+      if (t < 1) {
+        requestAnimationFrame(() => this.markDirty());
+      } else {
+        this.crossfadeState = null;
+      }
+    } else if (isRaster) {
+      const k = Math.max(0, Math.min(12, Math.floor(Math.log2(1024 / (this.camera.scale * this.dpr)))));
+      const renderedRasters = this.renderRasterTiles(k, 1);
+      if (renderedRasters === 0) {
+        this.renderLowZoomPlaceholder();
+      }
     } else {
-      visibleCellsCount = this.renderVectorCells(zqToRender);
+      visibleCellsCount = this.renderVectorCells(zqToRender ?? 11, 1);
     }
 
     // Render live in-progress stroke on top
@@ -217,7 +254,60 @@ export class CanvasRenderer {
     return this.currentStats;
   }
 
-  private renderVectorCells(zq: number): number {
+  private renderRasterTiles(level: number, alpha: number): number {
+    const viewport = this.getViewport();
+    const halfW = viewport.width / 2;
+    const halfH = viewport.height / 2;
+
+    const minTx = Math.floor(this.camera.tileX + this.camera.offsetX - halfW / this.camera.scale);
+    const maxTx = Math.floor(this.camera.tileX + this.camera.offsetX + halfW / this.camera.scale);
+    const minTy = Math.floor(this.camera.tileY + this.camera.offsetY - halfH / this.camera.scale);
+    const maxTy = Math.floor(this.camera.tileY + this.camera.offsetY + halfH / this.camera.scale);
+
+    const step = 1 << level; // 2^level base tiles per raster tile
+    const minRx = Math.floor(minTx / step);
+    const maxRx = Math.floor(maxTx / step);
+    const minRy = Math.floor(minTy / step);
+    const maxRy = Math.floor(maxTy / step);
+
+    let renderedCount = 0;
+
+    this.ctx.save();
+    this.ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+
+    for (let ry = minRy; ry <= maxRy; ry++) {
+      for (let rx = minRx; rx <= maxRx; rx++) {
+        const baseTx = rx * step;
+        const baseTy = ry * step;
+
+        const pTL = tilePositionToScreen(baseTx, baseTy, 0, 0, this.camera, viewport);
+        const pBR = tilePositionToScreen(baseTx + step, baseTy + step, 0, 0, this.camera, viewport);
+
+        const destX = pTL.x * this.dpr;
+        const destY = pTL.y * this.dpr;
+        const destW = (pBR.x - pTL.x) * this.dpr;
+        const destH = (pBR.y - pTL.y) * this.dpr;
+
+        if (
+          destX + destW >= 0 &&
+          destX <= this.canvas.width &&
+          destY + destH >= 0 &&
+          destY <= this.canvas.height
+        ) {
+          const img = this.rasterCache.get(level, rx, ry);
+          if (img) {
+            this.ctx.drawImage(img, destX, destY, destW, destH);
+            renderedCount++;
+          }
+        }
+      }
+    }
+
+    this.ctx.restore();
+    return renderedCount;
+  }
+
+  private renderVectorCells(zq: number, alpha = 1): number {
     const viewport = this.getViewport();
     const cellsPerAxis = getCellsPerTileAxis(zq);
     const unitsPerCell = getCellSizeUnits(zq);
@@ -233,6 +323,11 @@ export class CanvasRenderer {
 
     const visibleKeys = new Set<string>();
     let visibleCount = 0;
+
+    this.ctx.save();
+    if (alpha < 1) {
+      this.ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    }
 
     for (let ty = minTileY; ty <= maxTileY; ty++) {
       for (let tx = minTileX; tx <= maxTileX; tx++) {
@@ -266,7 +361,6 @@ export class CanvasRenderer {
               }
 
               // Blit cell bitmap to main canvas
-              // Coordinates on canvas in device pixels:
               const destX = pTopLeft.x * this.dpr;
               const destY = pTopLeft.y * this.dpr;
               const destW = (pBottomRight.x - pTopLeft.x) * this.dpr;
@@ -278,6 +372,8 @@ export class CanvasRenderer {
         }
       }
     }
+
+    this.ctx.restore();
 
     // Enforce LRU cache budget
     this.cellCache.evict(visibleKeys);

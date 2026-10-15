@@ -4,6 +4,24 @@ import { WebSocketServer } from 'ws';
 import { createStorage, Storage } from './db/storage.js';
 import { SessionManager } from './session/sessionManager.js';
 import { WebSocketGateway } from './gateway/gateway.js';
+import { getObjectStore, ObjectStore } from './storage/objectStore.js';
+
+export {
+  createStorage,
+  type Storage,
+  InMemoryStorage,
+  PostgresStorage,
+  type UserRecord,
+  type TileRecord,
+  type StrokeRecord,
+  type BakeJobRecord,
+} from './db/storage.js';
+export {
+  getObjectStore,
+  type ObjectStore,
+  MemoryObjectStore,
+  S3ObjectStore,
+} from './storage/objectStore.js';
 
 export interface ServerInstance {
   app: FastifyInstance;
@@ -11,6 +29,7 @@ export interface ServerInstance {
   gateway: WebSocketGateway;
   storage: Storage;
   sessionManager: SessionManager;
+  objectStore: ObjectStore;
   port: number;
   close: () => Promise<void>;
 }
@@ -18,6 +37,7 @@ export interface ServerInstance {
 export async function createServer(customPort?: number, customStorage?: Storage): Promise<ServerInstance> {
   const storage = customStorage || (await createStorage());
   const sessionManager = new SessionManager(storage);
+  const objectStore = getObjectStore();
 
   const app = fastify({
     logger: false,
@@ -50,6 +70,63 @@ export async function createServer(customPort?: number, customStorage?: Storage)
     return { accepted: true, rulesVersion: 1 };
   });
 
+  // Tile index endpoint (SPEC Section 5)
+  app.post('/api/tile-index', async (req, reply) => {
+    const body = req.body as { tileX: number; tileY: number }[];
+    if (!Array.isArray(body)) {
+      reply.status(400);
+      return { error: 'Expected array of tiles' };
+    }
+    const tilesToFetch = body.slice(0, 64);
+    const records = await storage.getTileIndex(tilesToFetch);
+    return records.map((r) => ({
+      tileX: r.tileX,
+      tileY: r.tileY,
+      snapshotVersion: r.snapshotVersion,
+      snapshotUrl: r.snapshotKey ? objectStore.getUrl(r.snapshotKey) : null,
+      maxStrokeId: r.maxStrokeId,
+      strokeCount: r.strokeCount,
+      frozen: r.frozen,
+    }));
+  });
+
+  // Snapshot binary retrieval endpoint (immutable, cached)
+  app.get('/snapshot/*', async (req, reply) => {
+    const key = (req.params as any)['*'];
+    const obj = await objectStore.get(key);
+    if (!obj) {
+      reply.status(404);
+      return { error: 'Snapshot not found' };
+    }
+    reply.header('Content-Type', obj.contentType);
+    reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+    return reply.send(Buffer.from(obj.data));
+  });
+
+  // Raster pyramid tile retrieval endpoint (SPEC Section 5)
+  app.get('/raster/:level/:x/:y.webp', async (req, reply) => {
+    const { level, x, y } = req.params as { level: string; x: string; y: string };
+    const lvl = parseInt(level, 10);
+    const rx = parseInt(x, 10);
+    const ry = parseInt(y, 10);
+
+    const record = await storage.getRasterTile(lvl, rx, ry);
+    if (!record) {
+      reply.status(404);
+      return reply.send('');
+    }
+
+    const obj = await objectStore.get(record.key);
+    if (!obj) {
+      reply.status(404);
+      return reply.send('');
+    }
+
+    reply.header('Content-Type', 'image/webp');
+    reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+    return reply.send(Buffer.from(obj.data));
+  });
+
   const port = customPort || Number(process.env.PORT || 3001);
 
   // Start HTTP listening
@@ -66,6 +143,7 @@ export async function createServer(customPort?: number, customStorage?: Storage)
     gateway,
     storage,
     sessionManager,
+    objectStore,
     port,
     close: async () => {
       wss.close();

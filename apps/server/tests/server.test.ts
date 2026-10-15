@@ -159,4 +159,59 @@ describe('Phase 1 Realtime Server & WebSocket Gateway', () => {
 
     wsReconnect.close();
   });
+
+  it('serves POST /api/tile-index and GET /snapshot/* correctly', async () => {
+    // 1. Setup a snapshot in storage and object store
+    await sharedStorage.updateTileSnapshot(1, 2, 3, 'snapshots/1_2_v3.ict1', 50);
+    const fakeSnapshotBytes = new Uint8Array([0x49, 0x43, 0x54, 0x31, 0, 0, 0, 0]);
+    await serverInst.objectStore.put('snapshots/1_2_v3.ict1', fakeSnapshotBytes, 'application/octet-stream');
+
+    // 2. Query /api/tile-index
+    const res = await fetch(`http://localhost:${PORT}/api/tile-index`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ tileX: 1, tileY: 2 }, { tileX: 99, tileY: 99 }]),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.length).toBe(2);
+
+    expect(data[0].tileX).toBe(1);
+    expect(data[0].tileY).toBe(2);
+    expect(data[0].snapshotVersion).toBe(3);
+    expect(data[0].snapshotUrl).toBe('/snapshot/snapshots/1_2_v3.ict1');
+    expect(data[0].maxStrokeId).toBe(50);
+
+    // Empty tile (99, 99)
+    expect(data[1].tileX).toBe(99);
+    expect(data[1].tileY).toBe(99);
+    expect(data[1].snapshotVersion).toBe(0);
+    expect(data[1].snapshotUrl).toBeNull();
+
+    // 3. Fetch snapshot through GET /snapshot/*
+    const snapRes = await fetch(`http://localhost:${PORT}${data[0].snapshotUrl}`);
+    expect(snapRes.status).toBe(200);
+    expect(snapRes.headers.get('content-type')).toBe('application/octet-stream');
+    expect(snapRes.headers.get('cache-control')).toContain('immutable');
+    const snapBody = new Uint8Array(await snapRes.arrayBuffer());
+    expect(snapBody).toEqual(fakeSnapshotBytes);
+  });
+
+  it('serves GET /raster/:level/:x/:y.webp or returns 404 for empty', async () => {
+    // 1. Empty raster tile returns 404
+    const emptyRes = await fetch(`http://localhost:${PORT}/raster/0/42/42.webp`);
+    expect(emptyRes.status).toBe(404);
+
+    // 2. Saved raster tile returns WebP with immutable cache-control
+    await sharedStorage.saveRasterTile(0, 5, 5, 1, 'raster/0/5_5_v1.webp');
+    const fakeWebp = new Uint8Array([0x52, 0x49, 0x46, 0x46]); // RIFF
+    await serverInst.objectStore.put('raster/0/5_5_v1.webp', fakeWebp, 'image/webp');
+
+    const validRes = await fetch(`http://localhost:${PORT}/raster/0/5/5.webp?v=1`);
+    expect(validRes.status).toBe(200);
+    expect(validRes.headers.get('content-type')).toBe('image/webp');
+    expect(validRes.headers.get('cache-control')).toContain('immutable');
+    const validBody = new Uint8Array(await validRes.arrayBuffer());
+    expect(validBody).toEqual(fakeWebp);
+  });
 });
