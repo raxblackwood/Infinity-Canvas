@@ -17,10 +17,14 @@ test.describe('Phase 1 Realtime Multi-Client Synchronization', () => {
       pageB.waitForFunction(() => typeof (window as any).__CANVAS_ENGINE__ !== 'undefined'),
     ]);
 
-    // Ensure both network clients are connected
+    // Ensure both network clients are connected and authenticated
     await Promise.all([
       pageA.waitForFunction(() => (window as any).__CANVAS_ENGINE__.network.isConnected),
       pageB.waitForFunction(() => (window as any).__CANVAS_ENGINE__.network.isConnected),
+    ]);
+    await Promise.all([
+      pageA.waitForFunction(() => (window as any).__CANVAS_ENGINE__.network.welcomeInfo !== null),
+      pageB.waitForFunction(() => (window as any).__CANVAS_ENGINE__.network.welcomeInfo !== null),
     ]);
 
     // 2. Client B registers a listener for incoming tile strokes
@@ -43,8 +47,8 @@ test.describe('Phase 1 Realtime Multi-Client Synchronization', () => {
     const box = await canvasA.boundingBox();
     expect(box).not.toBeNull();
 
-    const startX = box!.x + 300;
-    const startY = box!.y + 300;
+    const startX = box!.x + 500;
+    const startY = box!.y + 400;
 
     const drawStartTime = Date.now();
 

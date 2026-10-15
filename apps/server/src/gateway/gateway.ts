@@ -1,4 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import type { IncomingMessage } from 'http';
+import crypto from 'crypto';
 import {
   WsMessageType,
   decodeClientHello,
@@ -13,6 +15,8 @@ import {
   encodeServerLiveBegin,
   encodeServerLivePoints,
   encodeServerLiveEnd,
+  encodeServerTileFrozen,
+  encodeServerInk,
   decodeClientStrokeBegin,
   decodeClientStrokePreview,
   ErrorCode,
@@ -22,13 +26,17 @@ import {
 } from '@infinite-canvas/shared';
 import { Storage, UserRecord } from '../db/storage.js';
 import { SessionManager } from '../session/sessionManager.js';
+import { InkManager } from '../limiter/inkLimiter.js';
+import { RateLimiter, ConnectionPreviewLimiter } from '../limiter/rateLimiter.js';
 
 interface ClientState {
   ws: WebSocket;
+  ip: string;
   user?: UserRecord;
   subscribedTiles: Set<string>; // "tx,ty"
   liveSubscriptions: Set<string>; // "tx,ty" where live=true
   activePreviews: Map<number, number>; // clientStrokeId -> liveId
+  previewLimiter: ConnectionPreviewLimiter;
   isAlive: boolean;
 }
 
@@ -39,6 +47,8 @@ export class WebSocketGateway {
   private clients: Set<ClientState> = new Set();
   private tileSubscribers: Map<string, Set<ClientState>> = new Map(); // "tx,ty" -> clients
   private nextLiveId = 1;
+  public rateLimiter = new RateLimiter();
+  public inkManager = new InkManager();
   public isReadOnly = false;
 
   constructor(wss: WebSocketServer, storage: Storage, sessionManager: SessionManager) {
@@ -46,15 +56,27 @@ export class WebSocketGateway {
     this.storage = storage;
     this.sessionManager = sessionManager;
 
-    this.wss.on('connection', this.onConnection);
+    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
+      this.onConnection(ws, req);
+    });
   }
 
-  private onConnection = (ws: WebSocket): void => {
+  private onConnection = (ws: WebSocket, req: IncomingMessage): void => {
+    const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
+    const ip = rawIp.replace(/^.*:/, '');
+
+    if (!this.rateLimiter.allowConnection(ip)) {
+      ws.close(1008, 'Connection limit exceeded');
+      return;
+    }
+
     const clientState: ClientState = {
       ws,
+      ip,
       subscribedTiles: new Set(),
       liveSubscriptions: new Set(),
       activePreviews: new Map(),
+      previewLimiter: new ConnectionPreviewLimiter(),
       isAlive: true,
     };
     this.clients.add(clientState);
@@ -78,6 +100,7 @@ export class WebSocketGateway {
   };
 
   private cleanupClient(client: ClientState): void {
+    this.rateLimiter.releaseConnection(client.ip);
     this.clients.delete(client);
     for (const tileKey of client.subscribedTiles) {
       const subs = this.tileSubscribers.get(tileKey);
@@ -99,8 +122,8 @@ export class WebSocketGateway {
       const hello = decodeClientHello(buf);
       let session = await this.sessionManager.resumeSession(hello.token);
       if (!session) {
-        // If not found, create new session with this token
-        const tokenHash = Buffer.from(hello.token, 'hex');
+        const tokenBytes = Buffer.from(hello.token, 'hex');
+        const tokenHash = crypto.createHash('sha256').update(tokenBytes).digest();
         const user = await this.storage.findOrCreateUser(tokenHash);
         session = { user, token: hello.token };
       }
@@ -111,10 +134,11 @@ export class WebSocketGateway {
       }
 
       client.user = session.user;
+      const inkBucket = this.inkManager.getBucket(session.user.id);
       const welcome = encodeServerWelcome({
         userId: session.user.id,
         inkBurst: 100,
-        inkBalance: 100,
+        inkBalance: inkBucket.getBalance(),
         serverTime: Date.now(),
         readOnly: this.isReadOnly,
       });
@@ -176,6 +200,17 @@ export class WebSocketGateway {
       case WsMessageType.STROKE_BEGIN: {
         const begin = decodeClientStrokeBegin(buf);
         const tileKey = `${begin.tileX},${begin.tileY}`;
+
+        // Amendment 6: Drop preview if client is not subscribed to tile
+        if (!client.subscribedTiles.has(tileKey)) {
+          return;
+        }
+
+        // Amendment 6: Max 8 open previews per connection
+        if (!client.previewLimiter.canBeginPreview(begin.clientStrokeId)) {
+          return;
+        }
+
         const liveId = this.nextLiveId++;
         client.activePreviews.set(begin.clientStrokeId, liveId);
 
@@ -203,6 +238,11 @@ export class WebSocketGateway {
         const liveId = client.activePreviews.get(preview.clientStrokeId);
         if (!liveId) return;
 
+        // Amendment 6: Max 4 KB/s preview data per connection
+        if (!client.previewLimiter.canSendPoints(buf.length)) {
+          return;
+        }
+
         const livePtsBuf = encodeServerLivePoints(liveId, preview.points);
         for (const tileKey of client.subscribedTiles) {
           const subs = this.tileSubscribers.get(tileKey);
@@ -219,6 +259,7 @@ export class WebSocketGateway {
 
       case WsMessageType.STROKE_COMMIT: {
         const commit = decodeClientStrokeCommit(buf);
+        client.previewLimiter.endPreview(commit.clientStrokeId);
 
         if (this.isReadOnly) {
           client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.READ_ONLY));
@@ -246,10 +287,26 @@ export class WebSocketGateway {
           return;
         }
 
+        // Validate all coordinates are strictly within tile bounds [0, 65535]
+        for (const pt of decodedStroke.points) {
+          if (pt.x < 0 || pt.x > 65535 || pt.y < 0 || pt.y > 65535) {
+            client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
+            return;
+          }
+        }
+
         // Check tile freeze
         const tile = await this.storage.getTile(commit.tileX, commit.tileY);
         if (tile.frozen) {
           client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.TILE_FULL));
+          return;
+        }
+
+        // Check Ink
+        const inkBucket = this.inkManager.getBucket(client.user.id);
+        const inkCheck = inkBucket.tryConsume(decodedStroke.points.length);
+        if (!inkCheck.allowed) {
+          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.INK_EMPTY));
           return;
         }
 
@@ -262,8 +319,8 @@ export class WebSocketGateway {
             commit.strokeBytes
           );
 
-          // 1. Send ACK to author
-          client.ws.send(encodeServerStrokeAck(commit.clientStrokeId, saveResult.id, 100));
+          // 1. Send ACK to author with remaining ink
+          client.ws.send(encodeServerStrokeAck(commit.clientStrokeId, saveResult.id, inkCheck.remaining));
 
           // 2. Broadcast TILE_DELTA to all subscribers of this tile
           const tileKey = `${commit.tileX},${commit.tileY}`;
@@ -289,8 +346,20 @@ export class WebSocketGateway {
                 }
               }
             }
+
+            // If tile became frozen at TILE_STROKE_CAP, broadcast TILE_FROZEN (0x89)
+            if (saveResult.frozen) {
+              const frozenBuf = encodeServerTileFrozen(commit.tileX, commit.tileY);
+              for (const s of subs) {
+                if (s.ws.readyState === WebSocket.OPEN) {
+                  s.ws.send(frozenBuf);
+                }
+              }
+            }
           }
         } catch {
+          // Refund ink consumed if save failed
+          inkBucket.refund(decodedStroke.points.length);
           client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
         }
         break;
@@ -299,6 +368,15 @@ export class WebSocketGateway {
       case WsMessageType.UNDO: {
         const undone = await this.storage.undoLastStroke(client.user.id, UNDO_WINDOW_MS);
         if (undone) {
+          // Refund exact stroke ink
+          let ptsCount = 0;
+          try {
+            const decoded = decodeStroke(undone.data);
+            ptsCount = decoded.points.length;
+          } catch {}
+          const inkBucket = this.inkManager.getBucket(client.user.id);
+          const newBalance = inkBucket.refund(ptsCount);
+
           const tileKey = `${undone.tileX},${undone.tileY}`;
           const subs = this.tileSubscribers.get(tileKey);
           if (subs) {
@@ -309,6 +387,9 @@ export class WebSocketGateway {
               }
             }
           }
+
+          // Send updated ink balance to user
+          client.ws.send(encodeServerInk(newBalance));
         }
         break;
       }

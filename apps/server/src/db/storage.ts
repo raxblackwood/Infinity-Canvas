@@ -58,7 +58,7 @@ export interface Storage {
   getStrokesSince(tileX: number, tileY: number, sinceStrokeId: number): Promise<{ id: number; data: Uint8Array }[]>;
   getVisibleStrokesForTile(tileX: number, tileY: number): Promise<{ id: number; data: Uint8Array }[]>;
   updateTileSnapshot(tileX: number, tileY: number, version: number, key: string, maxStrokeId: number): Promise<void>;
-  undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number } | null>;
+  undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number; data: Uint8Array } | null>;
 
   // Bake job queue (SPEC Section 6 & 9)
   enqueueBakeJob(kind: string, tileX: number, tileY: number, level?: number, runAfter?: Date): Promise<number>;
@@ -217,7 +217,7 @@ export class InMemoryStorage implements Storage {
     tile.dirtySince = null;
   }
 
-  async undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number } | null> {
+  async undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number; data: Uint8Array } | null> {
     const cutoff = Date.now() - windowMs;
     for (let i = this.strokes.length - 1; i >= 0; i--) {
       const s = this.strokes[i];
@@ -226,7 +226,7 @@ export class InMemoryStorage implements Storage {
         const tile = await this.getTile(s.tileX, s.tileY);
         tile.strokeCount = Math.max(0, tile.strokeCount - 1);
         tile.dirtySince = new Date();
-        return { id: s.id, tileX: s.tileX, tileY: s.tileY };
+        return { id: s.id, tileX: s.tileX, tileY: s.tileY, data: s.data };
       }
     }
     return null;
@@ -595,14 +595,14 @@ export class PostgresStorage implements Storage {
     );
   }
 
-  async undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number } | null> {
+  async undoLastStroke(userId: string, windowMs: number): Promise<{ id: number; tileX: number; tileY: number; data: Uint8Array } | null> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const cutoff = new Date(Date.now() - windowMs);
 
       const findRes = await client.query(
-        `SELECT id, tile_x, tile_y FROM strokes
+        `SELECT id, tile_x, tile_y, data FROM strokes
          WHERE user_id = $1 AND status = 0 AND created_at >= $2
          ORDER BY id DESC LIMIT 1 FOR UPDATE`,
         [userId, cutoff]
@@ -616,6 +616,7 @@ export class PostgresStorage implements Storage {
       const strokeId = Number(row.id);
       const tileX = row.tile_x;
       const tileY = row.tile_y;
+      const data = new Uint8Array(row.data);
 
       await client.query(`UPDATE strokes SET status = 3 WHERE id = $1`, [strokeId]);
       await client.query(
@@ -625,7 +626,7 @@ export class PostgresStorage implements Storage {
       );
 
       await client.query('COMMIT');
-      return { id: strokeId, tileX, tileY };
+      return { id: strokeId, tileX, tileY, data };
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;

@@ -13,11 +13,15 @@ import {
   decodeServerStrokeAck,
   decodeServerStrokeReject,
   decodeServerStrokesHidden,
+  encodeClientUndo,
+  decodeServerTileFrozen,
+  decodeServerInk,
   decodeStroke,
   decodeTileSnapshot,
   TileSubEntry,
   LocalPoint,
   ServerWelcome,
+  ErrorCode,
 } from '@infinite-canvas/shared';
 import { CanvasEngine } from './CanvasEngine.js';
 import { StoredStroke } from './SpatialIndex.js';
@@ -46,7 +50,12 @@ export class NetworkClient {
 
   // Status callbacks
   public onConnectionChange?: (connected: boolean) => void;
+  public onInkChange?: (ink: number) => void;
+  public onTileFrozen?: (tileX: number, tileY: number) => void;
+  public onStrokeReject?: (clientStrokeId: number, errorCode: number) => void;
+  public onReadOnlyChange?: (readOnly: boolean) => void;
   public welcomeInfo: ServerWelcome | null = null;
+  public currentInk = 100;
 
   constructor(engine: CanvasEngine) {
     this.engine = engine;
@@ -135,6 +144,9 @@ export class NetworkClient {
     switch (type) {
       case WsMessageType.WELCOME: {
         this.welcomeInfo = decodeServerWelcome(buf);
+        this.currentInk = this.welcomeInfo.inkBalance;
+        this.onInkChange?.(this.currentInk);
+        this.onReadOnlyChange?.(this.welcomeInfo.readOnly);
         // Subscribe to current visible tiles around camera
         this.syncVisibleTiles();
         break;
@@ -217,21 +229,38 @@ export class NetworkClient {
       }
 
       case WsMessageType.STROKE_ACK: {
-        // Commit confirmed
+        const ack = decodeServerStrokeAck(buf);
+        this.currentInk = ack.inkBalance;
+        this.onInkChange?.(this.currentInk);
         break;
       }
 
       case WsMessageType.STROKE_REJECT: {
         const reject = decodeServerStrokeReject(buf);
         console.warn('Stroke rejected by server. Code:', reject.errorCode);
+        this.onStrokeReject?.(reject.clientStrokeId, reject.errorCode);
         break;
       }
 
       case WsMessageType.STROKES_HIDDEN: {
         const hidden = decodeServerStrokesHidden(buf);
-        // Refresh affected tile
-        this.engine.renderer.getTileIndex(hidden.tileX, hidden.tileY);
+        for (const strokeId of hidden.strokeIds) {
+          this.engine.renderer.removeStroke(hidden.tileX, hidden.tileY, strokeId);
+        }
         this.engine.renderer.markDirty();
+        break;
+      }
+
+      case WsMessageType.TILE_FROZEN: {
+        const frozen = decodeServerTileFrozen(buf);
+        this.onTileFrozen?.(frozen.tileX, frozen.tileY);
+        break;
+      }
+
+      case WsMessageType.INK: {
+        const ink = decodeServerInk(buf);
+        this.currentInk = ink.currentInk;
+        this.onInkChange?.(this.currentInk);
         break;
       }
     }
@@ -374,6 +403,11 @@ export class NetworkClient {
 
   getRemoteLiveStrokes(): RemoteLiveStroke[] {
     return Array.from(this.remoteLiveStrokes.values());
+  }
+
+  sendUndo(strokeId = 0): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(encodeClientUndo(strokeId));
   }
 
   get isConnected(): boolean {

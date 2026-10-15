@@ -30,6 +30,20 @@ export const INK_BURST = 100;
 export const INK_REFILL_INTERVAL_MS = 2000; // 1 unit per 2 seconds
 export const INK_REFILL_PER_SEC = 0.5;
 
+/**
+ * Calculates the ink cost for a stroke (SPEC Section 3):
+ * 1 + ceil(points / 64)
+ */
+export function calculateStrokeInkCost(pointsCount: number): number {
+  return 1 + Math.ceil(pointsCount / 64);
+}
+
+// Preview & Abuse Limits (SPEC Section 9, 11 & Amendment 6)
+export const MAX_OPEN_PREVIEWS_PER_CONNECTION = 8;
+export const MAX_PREVIEW_BYTES_PER_SEC = 4 * 1024; // 4 KB/s per connection
+export const MAX_CONNECTIONS_PER_IP = 10;
+export const MAX_SESSIONS_PER_IP_PER_MIN = 10;
+
 // Cache Budgets in bytes
 export const BITMAP_CACHE_MOBILE = 96 * 1024 * 1024; // 96 MB
 export const BITMAP_CACHE_DESKTOP = 256 * 1024 * 1024; // 256 MB

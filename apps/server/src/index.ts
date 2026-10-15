@@ -5,6 +5,8 @@ import { createStorage, Storage } from './db/storage.js';
 import { SessionManager } from './session/sessionManager.js';
 import { WebSocketGateway } from './gateway/gateway.js';
 import { getObjectStore, ObjectStore } from './storage/objectStore.js';
+import { RateLimiter } from './limiter/rateLimiter.js';
+import { InkManager } from './limiter/inkLimiter.js';
 
 export {
   createStorage,
@@ -22,6 +24,8 @@ export {
   MemoryObjectStore,
   S3ObjectStore,
 } from './storage/objectStore.js';
+export { RateLimiter, ConnectionPreviewLimiter } from './limiter/rateLimiter.js';
+export { InkManager, UserInkBucket } from './limiter/inkLimiter.js';
 
 export interface ServerInstance {
   app: FastifyInstance;
@@ -38,6 +42,11 @@ export async function createServer(customPort?: number, customStorage?: Storage)
   const storage = customStorage || (await createStorage());
   const sessionManager = new SessionManager(storage);
   const objectStore = getObjectStore();
+  const rateLimiter = new RateLimiter();
+  rateLimiter.exemptLoopback = process.env.NODE_ENV !== 'production';
+  const inkManager = new InkManager();
+
+  let gatewayInstance: WebSocketGateway | null = null;
 
   const app = fastify({
     logger: false,
@@ -52,7 +61,15 @@ export async function createServer(customPort?: number, customStorage?: Storage)
   app.get('/readyz', async () => ({ status: 'ready' }));
 
   // Anonymous session endpoint (SPEC Section 5)
-  app.post('/api/session', async (req) => {
+  app.post('/api/session', async (req, reply) => {
+    const rawIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || req.ip || 'unknown';
+    const ip = rawIp.replace(/^.*:/, '');
+
+    if (!rateLimiter.allowSessionCreation(ip)) {
+      reply.status(429);
+      return { error: 'Session creation rate limit exceeded' };
+    }
+
     const session = await sessionManager.createSession();
     return {
       token: session.token,
@@ -127,6 +144,19 @@ export async function createServer(customPort?: number, customStorage?: Storage)
     return reply.send(Buffer.from(obj.data));
   });
 
+  // Kill Switch endpoints (Phase 3)
+  app.get('/admin/api/kill-switch', async () => ({
+    readOnly: gatewayInstance ? gatewayInstance.isReadOnly : false,
+  }));
+
+  app.post('/admin/api/kill-switch', async (req) => {
+    const body = req.body as { readOnly?: boolean };
+    if (gatewayInstance && typeof body?.readOnly === 'boolean') {
+      gatewayInstance.isReadOnly = body.readOnly;
+    }
+    return { readOnly: gatewayInstance ? gatewayInstance.isReadOnly : false };
+  });
+
   const port = customPort || Number(process.env.PORT || 3001);
 
   // Start HTTP listening
@@ -136,6 +166,10 @@ export async function createServer(customPort?: number, customStorage?: Storage)
   // Mount WebSocket server
   const wss = new WebSocketServer({ server, path: '/ws' });
   const gateway = new WebSocketGateway(wss, storage, sessionManager);
+  // Share the same rateLimiter and inkManager instances
+  gateway.rateLimiter = rateLimiter;
+  gateway.inkManager = inkManager;
+  gatewayInstance = gateway;
 
   return {
     app,

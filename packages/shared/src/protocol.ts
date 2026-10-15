@@ -556,3 +556,75 @@ export function decodeServerLiveEnd(buf: Uint8Array): ServerLiveEnd {
   const serverStrokeId = decodeVarint(buf, state);
   return { liveId, serverStrokeId };
 }
+
+// Error Codes are defined in constants.ts
+
+// UNDO (0x08)
+export interface ClientUndo {
+  serverStrokeId: number;
+}
+
+export function encodeClientUndo(serverStrokeId = 0): Uint8Array {
+  const out = [WsMessageType.UNDO];
+  encodeVarint(serverStrokeId, out);
+  return new Uint8Array(out);
+}
+
+export function decodeClientUndo(buf: Uint8Array): ClientUndo {
+  if (buf.length < 1 || buf[0] !== WsMessageType.UNDO) {
+    throw new Error('Invalid UNDO message');
+  }
+  const state = { offset: 1 };
+  const serverStrokeId = state.offset < buf.length ? decodeVarint(buf, state) : 0;
+  return { serverStrokeId };
+}
+
+// TILE_FROZEN (0x89)
+export interface ServerTileFrozen {
+  tileX: number;
+  tileY: number;
+}
+
+export function encodeServerTileFrozen(tileX: number, tileY: number): Uint8Array {
+  const out = new Uint8Array(1 + 8);
+  out[0] = WsMessageType.TILE_FROZEN;
+  const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
+  view.setInt32(1, tileX, true);
+  view.setInt32(5, tileY, true);
+  return out;
+}
+
+export function decodeServerTileFrozen(buf: Uint8Array): ServerTileFrozen {
+  if (buf.length < 9 || buf[0] !== WsMessageType.TILE_FROZEN) {
+    throw new Error('Invalid TILE_FROZEN message');
+  }
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  return {
+    tileX: view.getInt32(1, true),
+    tileY: view.getInt32(5, true),
+  };
+}
+
+// INK (0x8A)
+export interface ServerInk {
+  currentInk: number;
+  refillIntervalMs: number;
+}
+
+export function encodeServerInk(currentInk: number, refillIntervalMs = 2000): Uint8Array {
+  const out = [WsMessageType.INK];
+  encodeVarint(currentInk, out);
+  encodeVarint(refillIntervalMs, out);
+  return new Uint8Array(out);
+}
+
+export function decodeServerInk(buf: Uint8Array): ServerInk {
+  if (buf.length < 2 || buf[0] !== WsMessageType.INK) {
+    throw new Error('Invalid INK message');
+  }
+  const state = { offset: 1 };
+  const currentInk = decodeVarint(buf, state);
+  const refillIntervalMs = decodeVarint(buf, state);
+  return { currentInk, refillIntervalMs };
+}
+

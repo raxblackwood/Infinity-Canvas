@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { PALETTE, BRUSH_WIDTHS } from '@infinite-canvas/shared';
+import React, { useState, useEffect } from 'react';
+import { PALETTE, BRUSH_WIDTHS, ErrorCode } from '@infinite-canvas/shared';
 import { CanvasEngine } from '../engine/CanvasEngine.js';
 import { InteractionMode } from '../engine/PointerCapture.js';
 
@@ -13,6 +13,53 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
   const [selectedWidth, setSelectedWidth] = useState(2); // default 256 units
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showSizePicker, setShowSizePicker] = useState(false);
+  const [ink, setInk] = useState(100);
+  const [toast, setToast] = useState<string | null>(null);
+  const [isReadOnly, setIsReadOnly] = useState(false);
+
+  useEffect(() => {
+    if (!engine) return;
+
+    if (engine.network) {
+      setInk(engine.network.currentInk);
+      engine.network.onInkChange = (newInk) => {
+        setInk(newInk);
+      };
+
+      engine.network.onTileFrozen = (tx, ty) => {
+        showToastNotice(`Tile (${tx}, ${ty}) reached 20,000 stroke cap and is now frozen!`);
+      };
+
+      engine.network.onStrokeReject = (_clientStrokeId, code) => {
+        if (code === ErrorCode.INK_EMPTY) {
+          showToastNotice('Out of ink! Refilling 1 token every 2s...');
+        } else if (code === ErrorCode.TILE_FULL) {
+          showToastNotice('Tile is full and frozen!');
+        } else if (code === ErrorCode.READ_ONLY) {
+          showToastNotice('Canvas is currently in read-only mode.');
+        } else if (code === ErrorCode.BAD_STROKE) {
+          showToastNotice('Stroke rejected: invalid stroke geometry.');
+        } else {
+          showToastNotice(`Stroke rejected (error code ${code})`);
+        }
+      };
+
+      engine.network.onReadOnlyChange = (ro) => {
+        setIsReadOnly(ro);
+      };
+
+      if (engine.network.welcomeInfo?.readOnly) {
+        setIsReadOnly(true);
+      }
+    }
+  }, [engine]);
+
+  const showToastNotice = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => {
+      setToast((cur) => (cur === msg ? null : cur));
+    }, 3500);
+  };
 
   const toggleMode = () => {
     const next = mode === 'draw' ? 'move' : 'draw';
@@ -41,8 +88,63 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
     engine.setScale(2048);
   };
 
+  const handleUndo = () => {
+    if (!engine?.network) return;
+    engine.network.sendUndo();
+  };
+
   return (
     <>
+      {/* Toast Notification Banner */}
+      {toast && (
+        <div
+          data-testid="toast-notification"
+          style={{
+            position: 'absolute',
+            top: 20,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#1E1E24',
+            color: '#FFFFFF',
+            padding: '8px 18px',
+            borderRadius: 20,
+            fontSize: 13,
+            fontWeight: 500,
+            boxShadow: '0 6px 20px rgba(0,0,0,0.25)',
+            zIndex: 200,
+            pointerEvents: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>⚠️</span>
+          <span>{toast}</span>
+        </div>
+      )}
+
+      {/* Read-Only Status Banner */}
+      {isReadOnly && (
+        <div
+          data-testid="readonly-banner"
+          style={{
+            position: 'absolute',
+            top: 60,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            backgroundColor: '#F59E0B',
+            color: '#FFFFFF',
+            padding: '4px 14px',
+            borderRadius: 14,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 150,
+          }}
+        >
+          🔒 Read-Only Mode Active
+        </div>
+      )}
+
       {/* Color Swatch Popover */}
       {showColorPicker && (
         <div
@@ -98,22 +200,20 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
             border: '1px solid rgba(0,0,0,0.08)',
             display: 'flex',
             alignItems: 'center',
-            gap: 14,
+            gap: 12,
             zIndex: 100,
           }}
         >
-          {BRUSH_WIDTHS.map((widthUnits, idx) => {
-            // Relative dot visual size: 6px to 26px
-            const dotSize = 6 + idx * 4;
+          {BRUSH_WIDTHS.map((width, idx) => {
+            const visualSize = 6 + idx * 4;
             return (
               <button
-                key={widthUnits}
+                key={width}
                 onClick={() => selectWidth(idx)}
-                title={`Brush size ${idx + 1} (${widthUnits} units)`}
                 style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: 10,
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
                   backgroundColor: selectedWidth === idx ? '#F0F0FF' : 'transparent',
                   border: selectedWidth === idx ? '2px solid #5B5BD6' : '1px solid transparent',
                   display: 'flex',
@@ -124,8 +224,8 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
               >
                 <div
                   style={{
-                    width: dotSize,
-                    height: dotSize,
+                    width: visualSize,
+                    height: visualSize,
                     borderRadius: '50%',
                     backgroundColor: PALETTE[selectedColor]?.hex || '#1A1A1A',
                   }}
@@ -155,6 +255,52 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           zIndex: 90,
         }}
       >
+        {/* Ink Meter */}
+        <div
+          data-testid="ink-meter"
+          title={`Ink remaining: ${ink}/100`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '4px 8px',
+            borderRadius: 12,
+            backgroundColor: ink < 20 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(91, 91, 214, 0.08)',
+            fontSize: 12,
+            fontWeight: 600,
+            color: ink < 20 ? '#DC2626' : '#5B5BD6',
+          }}
+        >
+          <span>💧</span>
+          <span>{ink}</span>
+        </div>
+
+        <div style={{ width: 1, height: 20, backgroundColor: '#E0E0E0' }} />
+
+        {/* Undo Button */}
+        <button
+          onClick={handleUndo}
+          data-testid="btn-undo"
+          title="Undo last stroke (within 30s)"
+          style={{
+            padding: '6px 10px',
+            borderRadius: 14,
+            backgroundColor: '#F0F0F5',
+            color: '#1A1A1A',
+            border: 'none',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          ↺ Undo
+        </button>
+
+        <div style={{ width: 1, height: 20, backgroundColor: '#E0E0E0' }} />
+
         {/* Color Button */}
         <button
           onClick={() => {
@@ -163,8 +309,8 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           }}
           title="Choose Color"
           style={{
-            width: 34,
-            height: 34,
+            width: 32,
+            height: 32,
             borderRadius: '50%',
             backgroundColor: PALETTE[selectedColor]?.hex || '#1A1A1A',
             border: '2px solid #FFFFFF',
@@ -181,8 +327,8 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           }}
           title="Choose Brush Size"
           style={{
-            width: 34,
-            height: 34,
+            width: 32,
+            height: 32,
             borderRadius: '50%',
             backgroundColor: '#F4F4F6',
             border: '1px solid rgba(0,0,0,0.1)',
@@ -194,15 +340,15 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
         >
           <div
             style={{
-              width: 6 + selectedWidth * 3,
-              height: 6 + selectedWidth * 3,
+              width: 5 + selectedWidth * 3,
+              height: 5 + selectedWidth * 3,
               borderRadius: '50%',
               backgroundColor: '#1A1A1A',
             }}
           />
         </button>
 
-        <div style={{ width: 1, height: 24, backgroundColor: '#E0E0E0' }} />
+        <div style={{ width: 1, height: 20, backgroundColor: '#E0E0E0' }} />
 
         {/* Draw / Move Toggle */}
         <button

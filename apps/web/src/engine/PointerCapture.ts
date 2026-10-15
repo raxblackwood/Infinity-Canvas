@@ -108,7 +108,9 @@ export class PointerCapture {
       y: e.clientY,
       pointerType: e.pointerType,
     });
-    this.element.setPointerCapture(e.pointerId);
+    try {
+      this.element.setPointerCapture(e.pointerId);
+    } catch {}
 
     // Two-finger pinch init
     if (this.activePointers.size === 2) {

@@ -126,6 +126,16 @@ export class CanvasRenderer {
     this.markDirty();
   }
 
+  removeStroke(tileX: number, tileY: number, strokeId: number): void {
+    const key = `${tileX},${tileY}`;
+    const index = this.tileIndices.get(key);
+    if (index) {
+      index.remove(strokeId);
+      this.cellCache.invalidateTile(tileX, tileY);
+      this.markDirty();
+    }
+  }
+
   setActiveLiveStroke(stroke: typeof this.activeLiveStroke): void {
     this.activeLiveStroke = stroke;
     this.markDirty();

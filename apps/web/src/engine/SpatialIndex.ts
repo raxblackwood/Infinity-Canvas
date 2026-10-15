@@ -96,6 +96,21 @@ export class TileSpatialIndex {
     return Array.from(this.strokes.values()).sort((a, b) => a.id - b.id);
   }
 
+  remove(strokeId: number): boolean {
+    if (!this.strokes.has(strokeId)) return false;
+    this.strokes.delete(strokeId);
+    for (let gy = 0; gy < GRID_SIZE; gy++) {
+      for (let gx = 0; gx < GRID_SIZE; gx++) {
+        const arr = this.grid[gy][gx];
+        const idx = arr.indexOf(strokeId);
+        if (idx !== -1) {
+          arr.splice(idx, 1);
+        }
+      }
+    }
+    return true;
+  }
+
   get strokeCount(): number {
     return this.strokes.size;
   }
