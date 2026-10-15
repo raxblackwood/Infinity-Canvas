@@ -15,3 +15,4 @@ This document records locked choices, open questions, and the chosen defaults ac
 | DEC-009 | Accounts & Auth | Anonymous device token (UUID + SHA-256 hashed 32-byte secret) | Stated locked decision in SPEC Section 2 & 11. Zero-login friction. | ADOPTED (DEFAULT) |
 | DEC-010 | Canvas Theme | Canvas is always light paper (`#FBFAF7`); Dark mode applies only to UI chrome | Stated locked decision in SPEC Section 2 & 7. | ADOPTED (DEFAULT) |
 | DEC-011 | Local Dev Environment & Services | Node 20+, pnpm workspaces, docker compose for postgres & minio | Docker compose for databases/s3; fallbacks for direct local/WSL instances if docker daemon is inactive. | ADOPTED (DEFAULT) |
+| DEC-012 | Phase 1 History Loading | Tile history loads through `SUBSCRIBE` with `sinceStrokeId=0` | Until snapshots and bake worker exist in Phase 2, initial tile history is served as deltas from the database. | ADOPTED |
