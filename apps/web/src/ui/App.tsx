@@ -3,6 +3,8 @@ import { CanvasEngine } from '../engine/CanvasEngine.js';
 import { PerformanceStats } from '../engine/CanvasRenderer.js';
 import { PerformanceHUD } from './PerformanceHUD.js';
 import { Toolbar } from './Toolbar.js';
+import { ReportModal } from './ReportModal.js';
+import { AdminDashboard } from './AdminDashboard.js';
 
 export const App: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -17,6 +19,14 @@ export const App: React.FC = () => {
     zq: 11,
   });
   const [engine, setEngine] = useState<CanvasEngine | null>(null);
+  const [isReportOpen, setIsReportOpen] = useState(false);
+  const [isAdminOpen, setIsAdminOpen] = useState(() => {
+    return (
+      window.location.hash.includes('admin') ||
+      window.location.search.includes('admin') ||
+      window.location.pathname.startsWith('/admin')
+    );
+  });
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -51,7 +61,24 @@ export const App: React.FC = () => {
         }}
       />
       <PerformanceHUD stats={stats} engine={engine} />
-      <Toolbar engine={engine} />
+      <Toolbar
+        engine={engine}
+        onOpenReport={() => setIsReportOpen(true)}
+        onOpenAdmin={() => setIsAdminOpen(true)}
+      />
+      <ReportModal
+        engine={engine}
+        isOpen={isReportOpen}
+        onClose={() => setIsReportOpen(false)}
+        onSuccess={(_autoQuarantined) => {
+          // Toast or feedback is already handled, or force refresh visible tiles
+          engine?.network?.syncVisibleTiles();
+        }}
+      />
+      <AdminDashboard
+        isOpen={isAdminOpen}
+        onClose={() => setIsAdminOpen(false)}
+      />
     </div>
   );
 };

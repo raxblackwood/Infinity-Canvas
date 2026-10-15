@@ -5,9 +5,11 @@ import { InteractionMode } from '../engine/PointerCapture.js';
 
 interface Props {
   engine: CanvasEngine | null;
+  onOpenReport?: () => void;
+  onOpenAdmin?: () => void;
 }
 
-export const Toolbar: React.FC<Props> = ({ engine }) => {
+export const Toolbar: React.FC<Props> = ({ engine, onOpenReport, onOpenAdmin }) => {
   const [mode, setMode] = useState<InteractionMode>('draw');
   const [selectedColor, setSelectedColor] = useState(0);
   const [selectedWidth, setSelectedWidth] = useState(2); // default 256 units
@@ -89,7 +91,10 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
   };
 
   const handleUndo = () => {
-    if (!engine?.network) return;
+    if (!engine?.network || !engine.network.isConnected) {
+      showToastNotice('Not connected to canvas');
+      return;
+    }
     engine.network.sendUndo();
   };
 
@@ -239,14 +244,20 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
       {/* Responsive Styles for Mobile */}
       <style>{`
         .canvas-toolbar {
-          gap: 10px;
+          gap: 8px;
           padding: 6px 14px;
           max-width: calc(100vw - 16px);
+          overflow-x: auto;
+          scrollbar-width: none;
+          -ms-overflow-style: none;
+        }
+        .canvas-toolbar::-webkit-scrollbar {
+          display: none;
         }
         .canvas-toolbar-btn-text {
           display: inline;
         }
-        @media (max-width: 480px) {
+        @media (max-width: 640px) {
           .canvas-toolbar {
             gap: 6px !important;
             padding: 4px 8px !important;
@@ -309,6 +320,8 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           title="Undo last stroke (within 30s)"
           style={{
             padding: '6px 8px',
+            minWidth: 32,
+            minHeight: 32,
             borderRadius: 14,
             backgroundColor: '#F0F0F5',
             color: '#1A1A1A',
@@ -318,11 +331,14 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: 3,
+            justifyContent: 'center',
+            gap: 4,
             flexShrink: 0,
+            userSelect: 'none',
+            touchAction: 'manipulation',
           }}
         >
-          <span>↺</span>
+          <span style={{ fontSize: 15, lineHeight: 1, fontWeight: 'bold' }}>↺</span>
           <span className="canvas-toolbar-btn-text">Undo</span>
         </button>
 
@@ -423,6 +439,64 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           <span>🎯</span>
           <span className="canvas-toolbar-btn-text">(0,0)</span>
         </button>
+
+        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
+
+        {/* Report Button */}
+        {onOpenReport && (
+          <button
+            onClick={onOpenReport}
+            data-testid="btn-report"
+            title="Report inappropriate content in current view"
+            style={{
+              padding: '6px 8px',
+              borderRadius: 14,
+              backgroundColor: '#F0F0F5',
+              color: '#DC2626',
+              border: 'none',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              flexShrink: 0,
+              userSelect: 'none',
+              touchAction: 'manipulation',
+            }}
+          >
+            <span>🚩</span>
+            <span className="canvas-toolbar-btn-text">Report</span>
+          </button>
+        )}
+
+        {/* Admin Dashboard Button */}
+        {onOpenAdmin && (
+          <button
+            onClick={onOpenAdmin}
+            data-testid="btn-admin"
+            title="Open Admin Dashboard"
+            style={{
+              padding: '6px 8px',
+              borderRadius: 14,
+              backgroundColor: '#F0F0F5',
+              color: '#5B5BD6',
+              border: 'none',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              flexShrink: 0,
+              userSelect: 'none',
+              touchAction: 'manipulation',
+            }}
+          >
+            <span>🛡️</span>
+            <span className="canvas-toolbar-btn-text">Admin</span>
+          </button>
+        )}
       </div>
     </>
   );

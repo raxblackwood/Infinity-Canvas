@@ -44,6 +44,41 @@ export interface BakeJobRecord {
   lockedAt: Date | null;
 }
 
+export interface ReportRecord {
+  id: number;
+  tileX: number;
+  tileY: number;
+  pointX: number;
+  pointY: number;
+  userId: string;
+  createdAt: Date;
+  reason: string;
+  note?: string;
+  status: number; // 0 open, 1 actioned, 2 dismissed
+}
+
+export interface ReviewItemRecord {
+  id: number;
+  tileX: number;
+  tileY: number;
+  flaggedReason: string;
+  strokeCount: number;
+  priority: number;
+  status: number; // 0 pending, 1 resolved
+  createdAt: Date;
+}
+
+export interface ModActionRecord {
+  id: number;
+  createdAt: Date;
+  adminUser: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  reason?: string;
+  metadata?: any;
+}
+
 export interface Storage {
   findOrCreateUser(tokenHash: Buffer): Promise<UserRecord>;
   getUserByTokenHash(tokenHash: Buffer): Promise<UserRecord | null>;
@@ -70,6 +105,38 @@ export interface Storage {
   saveRasterTile(level: number, x: number, y: number, version: number, key: string): Promise<void>;
   getRasterTile(level: number, x: number, y: number): Promise<{ version: number; key: string } | null>;
 
+  // Moderation & Admin (SPEC Section 10)
+  createReport(
+    tileX: number,
+    tileY: number,
+    pointX: number,
+    pointY: number,
+    userId: string,
+    reason: string,
+    note?: string
+  ): Promise<{ report: ReportRecord; autoQuarantined: boolean; affectedTile?: { tileX: number; tileY: number }; quarantinedIds?: number[] }>;
+  quarantineStrokesForTile(tileX: number, tileY: number, sinceTime?: Date): Promise<number[]>;
+  restoreStrokes(strokeIds: number[]): Promise<{ tileX: number; tileY: number; strokes: { id: number; data: Uint8Array }[] }[]>;
+  hideStrokes(strokeIds: number[]): Promise<{ tileX: number; tileY: number; strokeIds: number[] }[]>;
+  bulkHide(options: {
+    userId?: string;
+    tileX?: number;
+    tileY?: number;
+    minTx?: number;
+    minTy?: number;
+    maxTx?: number;
+    maxTy?: number;
+    since?: Date;
+    until?: Date;
+  }): Promise<{ affectedTiles: { tileX: number; tileY: number }[]; strokeIds: number[] }>;
+  setUserBan(userId: string, banned: boolean): Promise<void>;
+  logModAction(adminUser: string, action: string, targetType: string, targetId: string, reason?: string, metadata?: any): Promise<number>;
+  getModActions(limit?: number): Promise<ModActionRecord[]>;
+  getReviewQueue(status?: number): Promise<ReviewItemRecord[]>;
+  resolveReviewItem(id: number): Promise<void>;
+  enqueueReviewItem(tileX: number, tileY: number, flaggedReason: string, strokeCount: number, priority?: number): Promise<number>;
+  getStats(): Promise<{ strokesPerMinute: number; activeUsers: number; openReports: number; reviewQueueDepth: number }>;
+
   close(): Promise<void>;
 }
 
@@ -85,6 +152,12 @@ export class InMemoryStorage implements Storage {
   private bakeJobs: BakeJobRecord[] = [];
   private nextBakeJobId = 1;
   private rasterTiles: Map<string, { version: number; key: string }> = new Map(); // "level,x,y" -> data
+  private reports: ReportRecord[] = [];
+  private nextReportId = 1;
+  private reviewQueue: ReviewItemRecord[] = [];
+  private nextReviewId = 1;
+  private modActions: ModActionRecord[] = [];
+  private nextModActionId = 1;
 
   async findOrCreateUser(tokenHash: Buffer): Promise<UserRecord> {
     const key = tokenHash.toString('hex');
@@ -298,6 +371,247 @@ export class InMemoryStorage implements Storage {
     return item ? { ...item } : null;
   }
 
+  async createReport(
+    tileX: number,
+    tileY: number,
+    pointX: number,
+    pointY: number,
+    userId: string,
+    reason: string,
+    note?: string
+  ): Promise<{ report: ReportRecord; autoQuarantined: boolean; affectedTile?: { tileX: number; tileY: number }; quarantinedIds?: number[] }> {
+    const report: ReportRecord = {
+      id: this.nextReportId++,
+      tileX,
+      tileY,
+      pointX,
+      pointY,
+      userId,
+      createdAt: new Date(),
+      reason,
+      note,
+      status: 0,
+    };
+    this.reports.push(report);
+
+    // Auto-quarantine check: 3+ distinct reporters on the same tile within 1 hour
+    const oneHourAgo = new Date(Date.now() - 3600 * 1000);
+    const recentReports = this.reports.filter(
+      (r) => r.tileX === tileX && r.tileY === tileY && r.createdAt >= oneHourAgo
+    );
+    const distinctUsers = new Set(recentReports.map((r) => r.userId));
+
+    let autoQuarantined = false;
+    let quarantinedIds: number[] = [];
+
+    if (distinctUsers.size >= 3) {
+      autoQuarantined = true;
+      quarantinedIds = await this.quarantineStrokesForTile(tileX, tileY, oneHourAgo);
+      await this.enqueueReviewItem(
+        tileX,
+        tileY,
+        `Auto-quarantine: ${distinctUsers.size} distinct reports within 1 hour`,
+        quarantinedIds.length,
+        10
+      );
+    }
+
+    return {
+      report,
+      autoQuarantined,
+      affectedTile: autoQuarantined ? { tileX, tileY } : undefined,
+      quarantinedIds: autoQuarantined ? quarantinedIds : undefined,
+    };
+  }
+
+  async quarantineStrokesForTile(tileX: number, tileY: number, sinceTime?: Date): Promise<number[]> {
+    const quarantined: number[] = [];
+    for (const stroke of this.strokes) {
+      if (stroke.tileX === tileX && stroke.tileY === tileY && stroke.status === 0) {
+        if (!sinceTime || stroke.createdAt >= sinceTime) {
+          stroke.status = 2; // 2 = quarantined
+          quarantined.push(stroke.id);
+        }
+      }
+    }
+    return quarantined;
+  }
+
+  async restoreStrokes(strokeIds: number[]): Promise<{ tileX: number; tileY: number; strokes: { id: number; data: Uint8Array }[] }[]> {
+    const idSet = new Set(strokeIds);
+    const tileMap = new Map<string, { tileX: number; tileY: number; strokes: { id: number; data: Uint8Array }[] }>();
+
+    for (const stroke of this.strokes) {
+      if (idSet.has(stroke.id)) {
+        stroke.status = 0; // restore to visible
+        const key = `${stroke.tileX},${stroke.tileY}`;
+        let entry = tileMap.get(key);
+        if (!entry) {
+          entry = { tileX: stroke.tileX, tileY: stroke.tileY, strokes: [] };
+          tileMap.set(key, entry);
+        }
+        entry.strokes.push({ id: stroke.id, data: stroke.data });
+      }
+    }
+
+    return Array.from(tileMap.values());
+  }
+
+  async hideStrokes(strokeIds: number[]): Promise<{ tileX: number; tileY: number; strokeIds: number[] }[]> {
+    const idSet = new Set(strokeIds);
+    const tileMap = new Map<string, { tileX: number; tileY: number; strokeIds: number[] }>();
+
+    for (const stroke of this.strokes) {
+      if (idSet.has(stroke.id)) {
+        stroke.status = 1; // 1 = hidden
+        const key = `${stroke.tileX},${stroke.tileY}`;
+        let entry = tileMap.get(key);
+        if (!entry) {
+          entry = { tileX: stroke.tileX, tileY: stroke.tileY, strokeIds: [] };
+          tileMap.set(key, entry);
+        }
+        entry.strokeIds.push(stroke.id);
+      }
+    }
+
+    return Array.from(tileMap.values());
+  }
+
+  async bulkHide(options: {
+    userId?: string;
+    tileX?: number;
+    tileY?: number;
+    minTx?: number;
+    minTy?: number;
+    maxTx?: number;
+    maxTy?: number;
+    since?: Date;
+    until?: Date;
+  }): Promise<{ affectedTiles: { tileX: number; tileY: number }[]; strokeIds: number[] }> {
+    const affectedTilesMap = new Map<string, { tileX: number; tileY: number }>();
+    const hiddenStrokeIds: number[] = [];
+
+    for (const stroke of this.strokes) {
+      if (stroke.status !== 0 && stroke.status !== 2) continue; // only hide active/quarantined
+
+      if (options.userId && stroke.userId !== options.userId) continue;
+      if (options.tileX !== undefined && stroke.tileX !== options.tileX) continue;
+      if (options.tileY !== undefined && stroke.tileY !== options.tileY) continue;
+      if (options.minTx !== undefined && stroke.tileX < options.minTx) continue;
+      if (options.maxTx !== undefined && stroke.tileX > options.maxTx) continue;
+      if (options.minTy !== undefined && stroke.tileY < options.minTy) continue;
+      if (options.maxTy !== undefined && stroke.tileY > options.maxTy) continue;
+      if (options.since && stroke.createdAt < options.since) continue;
+      if (options.until && stroke.createdAt > options.until) continue;
+
+      stroke.status = 1; // hidden
+      hiddenStrokeIds.push(stroke.id);
+      const key = `${stroke.tileX},${stroke.tileY}`;
+      if (!affectedTilesMap.has(key)) {
+        affectedTilesMap.set(key, { tileX: stroke.tileX, tileY: stroke.tileY });
+      }
+    }
+
+    return {
+      affectedTiles: Array.from(affectedTilesMap.values()),
+      strokeIds: hiddenStrokeIds,
+    };
+  }
+
+  async setUserBan(userId: string, banned: boolean): Promise<void> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.banned = banned;
+    }
+  }
+
+  async logModAction(
+    adminUser: string,
+    action: string,
+    targetType: string,
+    targetId: string,
+    reason?: string,
+    metadata?: any
+  ): Promise<number> {
+    const id = this.nextModActionId++;
+    this.modActions.push({
+      id,
+      createdAt: new Date(),
+      adminUser,
+      action,
+      targetType,
+      targetId,
+      reason,
+      metadata,
+    });
+    return id;
+  }
+
+  async getModActions(limit = 100): Promise<ModActionRecord[]> {
+    return [...this.modActions]
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  async getReviewQueue(status?: number): Promise<ReviewItemRecord[]> {
+    return this.reviewQueue
+      .filter((item) => (status !== undefined ? item.status === status : true))
+      .sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        return a.createdAt.getTime() - b.createdAt.getTime();
+      });
+  }
+
+  async resolveReviewItem(id: number): Promise<void> {
+    const item = this.reviewQueue.find((q) => q.id === id);
+    if (item) {
+      item.status = 1; // resolved
+    }
+  }
+
+  async enqueueReviewItem(
+    tileX: number,
+    tileY: number,
+    flaggedReason: string,
+    strokeCount: number,
+    priority = 0
+  ): Promise<number> {
+    const id = this.nextReviewId++;
+    this.reviewQueue.push({
+      id,
+      tileX,
+      tileY,
+      flaggedReason,
+      strokeCount,
+      priority,
+      status: 0,
+      createdAt: new Date(),
+    });
+    return id;
+  }
+
+  async getStats(): Promise<{
+    strokesPerMinute: number;
+    activeUsers: number;
+    openReports: number;
+    reviewQueueDepth: number;
+  }> {
+    const oneMinAgo = new Date(Date.now() - 60 * 1000);
+    const fiveMinAgo = new Date(Date.now() - 300 * 1000);
+
+    const strokesPerMinute = this.strokes.filter((s) => s.createdAt >= oneMinAgo).length;
+    const activeUsers = Array.from(this.users.values()).filter((u) => u.lastSeenAt >= fiveMinAgo).length;
+    const openReports = this.reports.filter((r) => r.status === 0).length;
+    const reviewQueueDepth = this.reviewQueue.filter((q) => q.status === 0).length;
+
+    return {
+      strokesPerMinute,
+      activeUsers,
+      openReports,
+      reviewQueueDepth,
+    };
+  }
+
   async close(): Promise<void> {}
 }
 
@@ -371,6 +685,48 @@ export class PostgresStorage implements Storage {
         CREATE INDEX IF NOT EXISTS idx_strokes_tile_id ON strokes (tile_x, tile_y, id);
         CREATE INDEX IF NOT EXISTS idx_strokes_user_created ON strokes (user_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_bake_jobs_claim ON bake_jobs (run_after, attempts) WHERE locked_at IS NULL;
+
+        CREATE TABLE IF NOT EXISTS reports (
+          id BIGSERIAL PRIMARY KEY,
+          tile_x INT NOT NULL,
+          tile_y INT NOT NULL,
+          point_x INT NOT NULL DEFAULT 32768,
+          point_y INT NOT NULL DEFAULT 32768,
+          user_id UUID NOT NULL REFERENCES users(id),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          reason TEXT NOT NULL,
+          note TEXT,
+          status SMALLINT NOT NULL DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_reports_tile_created ON reports (tile_x, tile_y, created_at);
+        CREATE INDEX IF NOT EXISTS idx_reports_user ON reports (user_id);
+
+        CREATE TABLE IF NOT EXISTS review_queue (
+          id BIGSERIAL PRIMARY KEY,
+          tile_x INT NOT NULL,
+          tile_y INT NOT NULL,
+          flagged_reason TEXT NOT NULL,
+          stroke_count INT NOT NULL DEFAULT 0,
+          priority INT NOT NULL DEFAULT 0,
+          status SMALLINT NOT NULL DEFAULT 0,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_review_queue_pending ON review_queue (status, priority DESC, created_at ASC);
+
+        CREATE TABLE IF NOT EXISTS mod_actions (
+          id BIGSERIAL PRIMARY KEY,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          admin_user TEXT NOT NULL,
+          action TEXT NOT NULL,
+          target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          reason TEXT,
+          metadata JSONB
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mod_actions_created ON mod_actions (created_at DESC);
       `);
     } finally {
       client.release();
@@ -720,6 +1076,299 @@ export class PostgresStorage implements Storage {
     return {
       version: res.rows[0].version,
       key: res.rows[0].key,
+    };
+  }
+
+  async createReport(
+    tileX: number,
+    tileY: number,
+    pointX: number,
+    pointY: number,
+    userId: string,
+    reason: string,
+    note?: string
+  ): Promise<{ report: ReportRecord; autoQuarantined: boolean; affectedTile?: { tileX: number; tileY: number }; quarantinedIds?: number[] }> {
+    const res = await this.pool.query(
+      `INSERT INTO reports (tile_x, tile_y, point_x, point_y, user_id, reason, note, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 0, NOW())
+       RETURNING id, tile_x, tile_y, point_x, point_y, user_id, reason, note, status, created_at`,
+      [tileX, tileY, pointX, pointY, userId, reason, note || null]
+    );
+    const r = res.rows[0];
+    const report: ReportRecord = {
+      id: Number(r.id),
+      tileX: r.tile_x,
+      tileY: r.tile_y,
+      pointX: r.point_x,
+      pointY: r.point_y,
+      userId: r.user_id,
+      reason: r.reason,
+      note: r.note,
+      status: r.status,
+      createdAt: r.created_at,
+    };
+
+    // Auto-quarantine check: 3+ distinct reporters in same tile within 1 hour
+    const checkRes = await this.pool.query(
+      `SELECT COUNT(DISTINCT user_id) as reporter_count
+       FROM reports
+       WHERE tile_x = $1 AND tile_y = $2 AND created_at >= NOW() - INTERVAL '1 hour'`,
+      [tileX, tileY]
+    );
+    const count = parseInt(checkRes.rows[0].reporter_count, 10);
+    let autoQuarantined = false;
+    let quarantinedIds: number[] = [];
+
+    if (count >= 3) {
+      autoQuarantined = true;
+      const oneHourAgo = new Date(Date.now() - 3600 * 1000);
+      quarantinedIds = await this.quarantineStrokesForTile(tileX, tileY, oneHourAgo);
+      await this.enqueueReviewItem(
+        tileX,
+        tileY,
+        `Auto-quarantine: ${count} distinct reports within 1 hour`,
+        quarantinedIds.length,
+        10
+      );
+    }
+
+    return {
+      report,
+      autoQuarantined,
+      affectedTile: autoQuarantined ? { tileX, tileY } : undefined,
+      quarantinedIds: autoQuarantined ? quarantinedIds : undefined,
+    };
+  }
+
+  async quarantineStrokesForTile(tileX: number, tileY: number, sinceTime?: Date): Promise<number[]> {
+    const res = await this.pool.query(
+      `UPDATE strokes
+       SET status = 2
+       WHERE tile_x = $1 AND tile_y = $2 AND status = 0 AND ($3::TIMESTAMPTZ IS NULL OR created_at >= $3)
+       RETURNING id`,
+      [tileX, tileY, sinceTime || null]
+    );
+    return res.rows.map((row) => Number(row.id));
+  }
+
+  async restoreStrokes(strokeIds: number[]): Promise<{ tileX: number; tileY: number; strokes: { id: number; data: Uint8Array }[] }[]> {
+    if (strokeIds.length === 0) return [];
+    const res = await this.pool.query(
+      `UPDATE strokes
+       SET status = 0
+       WHERE id = ANY($1::bigint[])
+       RETURNING id, tile_x, tile_y, data`,
+      [strokeIds]
+    );
+
+    const tileMap = new Map<string, { tileX: number; tileY: number; strokes: { id: number; data: Uint8Array }[] }>();
+    for (const r of res.rows) {
+      const key = `${r.tile_x},${r.tile_y}`;
+      let entry = tileMap.get(key);
+      if (!entry) {
+        entry = { tileX: r.tile_x, tileY: r.tile_y, strokes: [] };
+        tileMap.set(key, entry);
+      }
+      entry.strokes.push({ id: Number(r.id), data: r.data });
+    }
+    return Array.from(tileMap.values());
+  }
+
+  async hideStrokes(strokeIds: number[]): Promise<{ tileX: number; tileY: number; strokeIds: number[] }[]> {
+    if (strokeIds.length === 0) return [];
+    const res = await this.pool.query(
+      `UPDATE strokes
+       SET status = 1
+       WHERE id = ANY($1::bigint[])
+       RETURNING id, tile_x, tile_y`,
+      [strokeIds]
+    );
+
+    const tileMap = new Map<string, { tileX: number; tileY: number; strokeIds: number[] }>();
+    for (const r of res.rows) {
+      const key = `${r.tile_x},${r.tile_y}`;
+      let entry = tileMap.get(key);
+      if (!entry) {
+        entry = { tileX: r.tile_x, tileY: r.tile_y, strokeIds: [] };
+        tileMap.set(key, entry);
+      }
+      entry.strokeIds.push(Number(r.id));
+    }
+    return Array.from(tileMap.values());
+  }
+
+  async bulkHide(options: {
+    userId?: string;
+    tileX?: number;
+    tileY?: number;
+    minTx?: number;
+    minTy?: number;
+    maxTx?: number;
+    maxTy?: number;
+    since?: Date;
+    until?: Date;
+  }): Promise<{ affectedTiles: { tileX: number; tileY: number }[]; strokeIds: number[] }> {
+    const conditions: string[] = ['(status = 0 OR status = 2)'];
+    const params: any[] = [];
+    let pIdx = 1;
+
+    if (options.userId) {
+      conditions.push(`user_id = $${pIdx++}`);
+      params.push(options.userId);
+    }
+    if (options.tileX !== undefined) {
+      conditions.push(`tile_x = $${pIdx++}`);
+      params.push(options.tileX);
+    }
+    if (options.tileY !== undefined) {
+      conditions.push(`tile_y = $${pIdx++}`);
+      params.push(options.tileY);
+    }
+    if (options.minTx !== undefined) {
+      conditions.push(`tile_x >= $${pIdx++}`);
+      params.push(options.minTx);
+    }
+    if (options.maxTx !== undefined) {
+      conditions.push(`tile_x <= $${pIdx++}`);
+      params.push(options.maxTx);
+    }
+    if (options.minTy !== undefined) {
+      conditions.push(`tile_y >= $${pIdx++}`);
+      params.push(options.minTy);
+    }
+    if (options.maxTy !== undefined) {
+      conditions.push(`tile_y <= $${pIdx++}`);
+      params.push(options.maxTy);
+    }
+    if (options.since) {
+      conditions.push(`created_at >= $${pIdx++}`);
+      params.push(options.since);
+    }
+    if (options.until) {
+      conditions.push(`created_at <= $${pIdx++}`);
+      params.push(options.until);
+    }
+
+    const sql = `UPDATE strokes SET status = 1 WHERE ${conditions.join(' AND ')} RETURNING id, tile_x, tile_y`;
+    const res = await this.pool.query(sql, params);
+
+    const affectedTilesMap = new Map<string, { tileX: number; tileY: number }>();
+    const strokeIds: number[] = [];
+
+    for (const r of res.rows) {
+      strokeIds.push(Number(r.id));
+      const key = `${r.tile_x},${r.tile_y}`;
+      if (!affectedTilesMap.has(key)) {
+        affectedTilesMap.set(key, { tileX: r.tile_x, tileY: r.tile_y });
+      }
+    }
+
+    return {
+      affectedTiles: Array.from(affectedTilesMap.values()),
+      strokeIds,
+    };
+  }
+
+  async setUserBan(userId: string, banned: boolean): Promise<void> {
+    await this.pool.query('UPDATE users SET banned = $2 WHERE id = $1', [userId, banned]);
+  }
+
+  async logModAction(
+    adminUser: string,
+    action: string,
+    targetType: string,
+    targetId: string,
+    reason?: string,
+    metadata?: any
+  ): Promise<number> {
+    const res = await this.pool.query(
+      `INSERT INTO mod_actions (created_at, admin_user, action, target_type, target_id, reason, metadata)
+       VALUES (NOW(), $1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [adminUser, action, targetType, targetId, reason || null, metadata ? JSON.stringify(metadata) : null]
+    );
+    return Number(res.rows[0].id);
+  }
+
+  async getModActions(limit = 100): Promise<ModActionRecord[]> {
+    const res = await this.pool.query(
+      `SELECT id, created_at, admin_user, action, target_type, target_id, reason, metadata
+       FROM mod_actions
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return res.rows.map((r) => ({
+      id: Number(r.id),
+      createdAt: r.created_at,
+      adminUser: r.admin_user,
+      action: r.action,
+      targetType: r.target_type,
+      targetId: r.target_id,
+      reason: r.reason,
+      metadata: r.metadata,
+    }));
+  }
+
+  async getReviewQueue(status?: number): Promise<ReviewItemRecord[]> {
+    const res = await this.pool.query(
+      `SELECT id, tile_x, tile_y, flagged_reason, stroke_count, priority, status, created_at
+       FROM review_queue
+       WHERE ($1::smallint IS NULL OR status = $1)
+       ORDER BY priority DESC, created_at ASC`,
+      [status !== undefined ? status : null]
+    );
+    return res.rows.map((r) => ({
+      id: Number(r.id),
+      tileX: r.tile_x,
+      tileY: r.tile_y,
+      flaggedReason: r.flagged_reason,
+      strokeCount: r.stroke_count,
+      priority: r.priority,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async resolveReviewItem(id: number): Promise<void> {
+    await this.pool.query('UPDATE review_queue SET status = 1 WHERE id = $1', [id]);
+  }
+
+  async enqueueReviewItem(
+    tileX: number,
+    tileY: number,
+    flaggedReason: string,
+    strokeCount: number,
+    priority = 0
+  ): Promise<number> {
+    const res = await this.pool.query(
+      `INSERT INTO review_queue (tile_x, tile_y, flagged_reason, stroke_count, priority, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, 0, NOW())
+       RETURNING id`,
+      [tileX, tileY, flaggedReason, strokeCount, priority]
+    );
+    return Number(res.rows[0].id);
+  }
+
+  async getStats(): Promise<{
+    strokesPerMinute: number;
+    activeUsers: number;
+    openReports: number;
+    reviewQueueDepth: number;
+  }> {
+    const res = await this.pool.query(`
+      SELECT
+        (SELECT COUNT(*) FROM strokes WHERE created_at >= NOW() - INTERVAL '1 minute') AS spm,
+        (SELECT COUNT(*) FROM users WHERE last_seen_at >= NOW() - INTERVAL '5 minutes') AS active_users,
+        (SELECT COUNT(*) FROM reports WHERE status = 0) AS open_reports,
+        (SELECT COUNT(*) FROM review_queue WHERE status = 0) AS queue_depth
+    `);
+    const r = res.rows[0];
+    return {
+      strokesPerMinute: Number(r.spm || 0),
+      activeUsers: Number(r.active_users || 0),
+      openReports: Number(r.open_reports || 0),
+      reviewQueueDepth: Number(r.queue_depth || 0),
     };
   }
 

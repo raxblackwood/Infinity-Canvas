@@ -396,6 +396,20 @@ export class WebSocketGateway {
     }
   }
 
+  public broadcastStrokesHidden(tileX: number, tileY: number, strokeIds: number[]): void {
+    if (strokeIds.length === 0) return;
+    const tileKey = `${tileX},${tileY}`;
+    const subs = this.tileSubscribers.get(tileKey);
+    if (!subs || subs.size === 0) return;
+
+    const hiddenBuf = encodeServerStrokesHidden(tileX, tileY, strokeIds);
+    for (const s of subs) {
+      if (s.ws.readyState === WebSocket.OPEN) {
+        s.ws.send(hiddenBuf);
+      }
+    }
+  }
+
   get connectedClientsCount(): number {
     return this.clients.size;
   }
