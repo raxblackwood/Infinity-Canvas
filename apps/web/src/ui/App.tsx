@@ -16,21 +16,24 @@ export const App: React.FC = () => {
     scale: 2048,
     zq: 11,
   });
+  const [engine, setEngine] = useState<CanvasEngine | null>(null);
 
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    const engine = new CanvasEngine(canvasRef.current, {
+    const eng = new CanvasEngine(canvasRef.current, {
       onStatsUpdate: (newStats) => {
         setStats(newStats);
       },
     });
-    engineRef.current = engine;
-    (window as any).__CANVAS_ENGINE__ = engine;
+    engineRef.current = eng;
+    setEngine(eng);
+    (window as any).__CANVAS_ENGINE__ = eng;
 
     return () => {
-      engine.destroy();
+      eng.destroy();
       engineRef.current = null;
+      setEngine(null);
       delete (window as any).__CANVAS_ENGINE__;
     };
   }, []);
@@ -47,8 +50,8 @@ export const App: React.FC = () => {
           touchAction: 'none',
         }}
       />
-      <PerformanceHUD stats={stats} engine={engineRef.current} />
-      <Toolbar engine={engineRef.current} />
+      <PerformanceHUD stats={stats} engine={engine} />
+      <Toolbar engine={engine} />
     </div>
   );
 };

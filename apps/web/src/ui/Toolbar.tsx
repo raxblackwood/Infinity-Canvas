@@ -140,7 +140,7 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
       <div
         style={{
           position: 'absolute',
-          bottom: 'calc(16px + env(safe-area-inset-bottom, 0px))',
+          bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
           left: '50%',
           transform: 'translateX(-50%)',
           backgroundColor: 'rgba(255, 255, 255, 0.92)',
