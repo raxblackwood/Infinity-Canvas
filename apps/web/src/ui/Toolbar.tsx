@@ -236,8 +236,33 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
         </div>
       )}
 
+      {/* Responsive Styles for Mobile */}
+      <style>{`
+        .canvas-toolbar {
+          gap: 10px;
+          padding: 6px 14px;
+          max-width: calc(100vw - 16px);
+        }
+        .canvas-toolbar-btn-text {
+          display: inline;
+        }
+        @media (max-width: 480px) {
+          .canvas-toolbar {
+            gap: 6px !important;
+            padding: 4px 8px !important;
+          }
+          .canvas-toolbar-btn-text {
+            display: none !important;
+          }
+          .canvas-toolbar-divider {
+            margin: 0 1px !important;
+          }
+        }
+      `}</style>
+
       {/* Main Bottom Toolbar */}
       <div
+        className="canvas-toolbar"
         style={{
           position: 'absolute',
           bottom: 'calc(76px + env(safe-area-inset-bottom, 0px))',
@@ -246,13 +271,12 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           backgroundColor: 'rgba(255, 255, 255, 0.92)',
           backdropFilter: 'blur(16px)',
           borderRadius: 24,
-          padding: '6px 14px',
           boxShadow: '0 4px 24px rgba(0,0,0,0.14)',
           border: '1px solid rgba(0,0,0,0.08)',
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
           zIndex: 90,
+          whiteSpace: 'nowrap',
         }}
       >
         {/* Ink Meter */}
@@ -262,20 +286,21 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 5,
-            padding: '4px 8px',
+            gap: 4,
+            padding: '4px 6px',
             borderRadius: 12,
             backgroundColor: ink < 20 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(91, 91, 214, 0.08)',
             fontSize: 12,
             fontWeight: 600,
             color: ink < 20 ? '#DC2626' : '#5B5BD6',
+            flexShrink: 0,
           }}
         >
           <span>💧</span>
           <span>{ink}</span>
         </div>
 
-        <div style={{ width: 1, height: 20, backgroundColor: '#E0E0E0' }} />
+        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
 
         {/* Undo Button */}
         <button
@@ -283,7 +308,7 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           data-testid="btn-undo"
           title="Undo last stroke (within 30s)"
           style={{
-            padding: '6px 10px',
+            padding: '6px 8px',
             borderRadius: 14,
             backgroundColor: '#F0F0F5',
             color: '#1A1A1A',
@@ -293,13 +318,15 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
+            gap: 3,
+            flexShrink: 0,
           }}
         >
-          ↺ Undo
+          <span>↺</span>
+          <span className="canvas-toolbar-btn-text">Undo</span>
         </button>
 
-        <div style={{ width: 1, height: 20, backgroundColor: '#E0E0E0' }} />
+        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
 
         {/* Color Button */}
         <button
@@ -309,13 +336,14 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           }}
           title="Choose Color"
           style={{
-            width: 32,
-            height: 32,
+            width: 30,
+            height: 30,
             borderRadius: '50%',
             backgroundColor: PALETTE[selectedColor]?.hex || '#1A1A1A',
             border: '2px solid #FFFFFF',
             boxShadow: '0 0 0 1px rgba(0,0,0,0.2)',
             cursor: 'pointer',
+            flexShrink: 0,
           }}
         />
 
@@ -327,8 +355,8 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
           }}
           title="Choose Brush Size"
           style={{
-            width: 32,
-            height: 32,
+            width: 30,
+            height: 30,
             borderRadius: '50%',
             backgroundColor: '#F4F4F6',
             border: '1px solid rgba(0,0,0,0.1)',
@@ -336,25 +364,27 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
             alignItems: 'center',
             justifyContent: 'center',
             cursor: 'pointer',
+            flexShrink: 0,
           }}
         >
           <div
             style={{
-              width: 5 + selectedWidth * 3,
-              height: 5 + selectedWidth * 3,
+              width: 4 + selectedWidth * 3,
+              height: 4 + selectedWidth * 3,
               borderRadius: '50%',
               backgroundColor: '#1A1A1A',
             }}
           />
         </button>
 
-        <div style={{ width: 1, height: 20, backgroundColor: '#E0E0E0' }} />
+        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
 
         {/* Draw / Move Toggle */}
         <button
           onClick={toggleMode}
+          title={mode === 'draw' ? 'Switch to Move tool' : 'Switch to Draw tool'}
           style={{
-            padding: '6px 12px',
+            padding: '6px 10px',
             borderRadius: 14,
             backgroundColor: mode === 'draw' ? '#5B5BD6' : '#F0F0F5',
             color: mode === 'draw' ? '#FFFFFF' : '#1A1A1A',
@@ -362,26 +392,36 @@ export const Toolbar: React.FC<Props> = ({ engine }) => {
             fontWeight: 600,
             fontSize: 12,
             cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 3,
+            flexShrink: 0,
           }}
         >
-          {mode === 'draw' ? '✏️ Draw' : '✋ Move'}
+          <span>{mode === 'draw' ? '✏️' : '✋'}</span>
+          <span className="canvas-toolbar-btn-text">{mode === 'draw' ? 'Draw' : 'Move'}</span>
         </button>
 
         {/* Reset View */}
         <button
           onClick={resetView}
-          title="Reset View to Center"
+          title="Reset View to Center (0, 0)"
           style={{
-            padding: '6px 10px',
+            padding: '6px 8px',
             borderRadius: 14,
             backgroundColor: '#F0F0F5',
             color: '#1A1A1A',
             border: 'none',
             fontSize: 12,
             cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexShrink: 0,
           }}
         >
-          🎯 (0,0)
+          <span>🎯</span>
+          <span className="canvas-toolbar-btn-text">(0,0)</span>
         </button>
       </div>
     </>
