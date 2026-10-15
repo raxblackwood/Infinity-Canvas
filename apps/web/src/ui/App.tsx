@@ -26,10 +26,12 @@ export const App: React.FC = () => {
       },
     });
     engineRef.current = engine;
+    (window as any).__CANVAS_ENGINE__ = engine;
 
     return () => {
       engine.destroy();
       engineRef.current = null;
+      delete (window as any).__CANVAS_ENGINE__;
     };
   }, []);
 
