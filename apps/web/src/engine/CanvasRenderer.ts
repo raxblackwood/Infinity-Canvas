@@ -640,4 +640,95 @@ export class CanvasRenderer {
   get dirty(): boolean {
     return this.isDirty;
   }
+
+  getAllLoadedStrokes(filterTiles?: { tileX: number; tileY: number }[]): StoredStroke[] {
+    const strokes: StoredStroke[] = [];
+    if (filterTiles && filterTiles.length > 0) {
+      for (const t of filterTiles) {
+        const idx = this.tileIndices.get(`${t.tileX},${t.tileY}`);
+        if (idx) {
+          strokes.push(...idx.getAllStrokes());
+        }
+      }
+    } else {
+      for (const idx of this.tileIndices.values()) {
+        strokes.push(...idx.getAllStrokes());
+      }
+    }
+    return strokes.sort((a, b) => a.id - b.id);
+  }
+
+  exportPNG(multiplier = 2): string {
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = this.canvas.width * multiplier;
+    exportCanvas.height = this.canvas.height * multiplier;
+    const ctx = exportCanvas.getContext('2d');
+    if (!ctx) return this.canvas.toDataURL('image/png');
+
+    ctx.fillStyle = CANVAS_BG_COLOR;
+    ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    ctx.drawImage(this.canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+    return exportCanvas.toDataURL('image/png');
+  }
+
+  exportSVG(filterTiles?: { tileX: number; tileY: number }[]): string {
+    const strokes = this.getAllLoadedStrokes(filterTiles);
+
+    let minTx = filterTiles && filterTiles.length > 0 ? Math.min(...filterTiles.map((t) => t.tileX)) : this.camera.tileX;
+    let maxTx = filterTiles && filterTiles.length > 0 ? Math.max(...filterTiles.map((t) => t.tileX)) : this.camera.tileX;
+    let minTy = filterTiles && filterTiles.length > 0 ? Math.min(...filterTiles.map((t) => t.tileY)) : this.camera.tileY;
+    let maxTy = filterTiles && filterTiles.length > 0 ? Math.max(...filterTiles.map((t) => t.tileY)) : this.camera.tileY;
+
+    if (strokes.length > 0 && (!filterTiles || filterTiles.length === 0)) {
+      minTx = Math.min(...strokes.map((s) => s.tileX));
+      maxTx = Math.max(...strokes.map((s) => s.tileX));
+      minTy = Math.min(...strokes.map((s) => s.tileY));
+      maxTy = Math.max(...strokes.map((s) => s.tileY));
+    }
+
+    const tileCols = Math.max(1, maxTx - minTx + 1);
+    const tileRows = Math.max(1, maxTy - minTy + 1);
+    const svgWidth = tileCols * 1024;
+    const svgHeight = tileRows * 1024;
+
+    const pathStrings: string[] = [];
+    for (const stroke of strokes) {
+      const color = PALETTE[stroke.colorIndex]?.hex || '#1A1A1A';
+      const widthUnits = BRUSH_WIDTHS[stroke.widthIndex] || 256;
+      const strokeWidthSvg = Math.max(1, (widthUnits / TILE_UNITS) * 1024);
+
+      const tileOffsetX = (stroke.tileX - minTx) * 1024;
+      const tileOffsetY = (stroke.tileY - minTy) * 1024;
+
+      if (stroke.points.length === 1) {
+        const cx = tileOffsetX + (stroke.points[0].x / TILE_UNITS) * 1024;
+        const cy = tileOffsetY + (stroke.points[0].y / TILE_UNITS) * 1024;
+        const r = strokeWidthSvg / 2;
+        pathStrings.push(`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="${color}" />`);
+      } else if (stroke.points.length > 1) {
+        const beziers = catmullRomToBezier(stroke.points);
+        if (beziers.length > 0) {
+          let d = `M ${(tileOffsetX + (beziers[0].p0.x / TILE_UNITS) * 1024).toFixed(1)} ${(tileOffsetY + (beziers[0].p0.y / TILE_UNITS) * 1024).toFixed(1)}`;
+          for (const b of beziers) {
+            const cp1x = (tileOffsetX + (b.cp1.x / TILE_UNITS) * 1024).toFixed(1);
+            const cp1y = (tileOffsetY + (b.cp1.y / TILE_UNITS) * 1024).toFixed(1);
+            const cp2x = (tileOffsetX + (b.cp2.x / TILE_UNITS) * 1024).toFixed(1);
+            const cp2y = (tileOffsetY + (b.cp2.y / TILE_UNITS) * 1024).toFixed(1);
+            const p3x = (tileOffsetX + (b.p3.x / TILE_UNITS) * 1024).toFixed(1);
+            const p3y = (tileOffsetY + (b.p3.y / TILE_UNITS) * 1024).toFixed(1);
+            d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p3x} ${p3y}`;
+          }
+          pathStrings.push(
+            `<path d="${d}" fill="none" stroke="${color}" stroke-width="${strokeWidthSvg.toFixed(1)}" stroke-linecap="round" stroke-linejoin="round" />`
+          );
+        }
+      }
+    }
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgWidth} ${svgHeight}" width="${svgWidth}" height="${svgHeight}">
+  <rect width="100%" height="100%" fill="${CANVAS_BG_COLOR}" />
+  ${pathStrings.join('\n  ')}
+</svg>`;
+  }
 }

@@ -135,7 +135,10 @@ export interface Storage {
   getReviewQueue(status?: number): Promise<ReviewItemRecord[]>;
   resolveReviewItem(id: number): Promise<void>;
   enqueueReviewItem(tileX: number, tileY: number, flaggedReason: string, strokeCount: number, priority?: number): Promise<number>;
-  getStats(): Promise<{ strokesPerMinute: number; activeUsers: number; openReports: number; reviewQueueDepth: number }>;
+  // Discovery & Activity (SPEC Section 7 & Phase 5)
+  getRecentActivity(sinceTime?: Date, limit?: number): Promise<{ tileX: number; tileY: number; strokeCount: number; activeUsers: number }[]>;
+  getSpawnLocation(): Promise<{ tileX: number; tileY: number; offsetX: number; offsetY: number; scale: number }>;
+  updateUserRulesVersion(userId: string, rulesVersion: number): Promise<void>;
 
   close(): Promise<void>;
 }
@@ -610,6 +613,71 @@ export class InMemoryStorage implements Storage {
       openReports,
       reviewQueueDepth,
     };
+  }
+
+  async getRecentActivity(
+    sinceTime: Date = new Date(Date.now() - 3600 * 1000),
+    limit = 50
+  ): Promise<{ tileX: number; tileY: number; strokeCount: number; activeUsers: number }[]> {
+    let candidateStrokes = this.strokes.filter(
+      (s) => s.status === 0 && s.createdAt >= sinceTime
+    );
+
+    // If no strokes within sinceTime, fallback to all visible strokes so canvas is not empty
+    if (candidateStrokes.length === 0) {
+      candidateStrokes = this.strokes.filter((s) => s.status === 0);
+    }
+
+    const tileMap = new Map<string, { tileX: number; tileY: number; strokeCount: number; users: Set<string> }>();
+    for (const s of candidateStrokes) {
+      const key = `${s.tileX},${s.tileY}`;
+      let entry = tileMap.get(key);
+      if (!entry) {
+        entry = { tileX: s.tileX, tileY: s.tileY, strokeCount: 0, users: new Set() };
+        tileMap.set(key, entry);
+      }
+      entry.strokeCount++;
+      entry.users.add(s.userId);
+    }
+
+    const results = Array.from(tileMap.values())
+      .map((e) => ({
+        tileX: e.tileX,
+        tileY: e.tileY,
+        strokeCount: e.strokeCount,
+        activeUsers: e.users.size,
+      }))
+      .sort((a, b) => b.strokeCount - a.strokeCount)
+      .slice(0, limit);
+
+    return results;
+  }
+
+  async getSpawnLocation(): Promise<{ tileX: number; tileY: number; offsetX: number; offsetY: number; scale: number }> {
+    const activity = await this.getRecentActivity(new Date(Date.now() - 3600 * 1000), 1);
+    if (activity.length > 0) {
+      return {
+        tileX: activity[0].tileX,
+        tileY: activity[0].tileY,
+        offsetX: 0.5,
+        offsetY: 0.5,
+        scale: 2048,
+      };
+    }
+    return {
+      tileX: 0,
+      tileY: 0,
+      offsetX: 0.5,
+      offsetY: 0.5,
+      scale: 2048,
+    };
+  }
+
+  async updateUserRulesVersion(userId: string, rulesVersion: number): Promise<void> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.rulesVersion = rulesVersion;
+    }
   }
 
   async close(): Promise<void> {}
@@ -1370,6 +1438,64 @@ export class PostgresStorage implements Storage {
       openReports: Number(r.open_reports || 0),
       reviewQueueDepth: Number(r.queue_depth || 0),
     };
+  }
+
+  async getRecentActivity(
+    sinceTime: Date = new Date(Date.now() - 3600 * 1000),
+    limit = 50
+  ): Promise<{ tileX: number; tileY: number; strokeCount: number; activeUsers: number }[]> {
+    let res = await this.pool.query(
+      `SELECT tile_x as "tileX", tile_y as "tileY", COUNT(*)::int as "strokeCount", COUNT(DISTINCT user_id)::int as "activeUsers"
+       FROM strokes
+       WHERE status = 0 AND created_at >= $1
+       GROUP BY tile_x, tile_y
+       ORDER BY "strokeCount" DESC
+       LIMIT $2`,
+      [sinceTime, limit]
+    );
+
+    if (res.rows.length === 0) {
+      res = await this.pool.query(
+        `SELECT tile_x as "tileX", tile_y as "tileY", COUNT(*)::int as "strokeCount", COUNT(DISTINCT user_id)::int as "activeUsers"
+         FROM strokes
+         WHERE status = 0
+         GROUP BY tile_x, tile_y
+         ORDER BY MAX(created_at) DESC
+         LIMIT $1`,
+        [limit]
+      );
+    }
+
+    return res.rows.map((r: any) => ({
+      tileX: Number(r.tileX),
+      tileY: Number(r.tileY),
+      strokeCount: Number(r.strokeCount),
+      activeUsers: Number(r.activeUsers),
+    }));
+  }
+
+  async getSpawnLocation(): Promise<{ tileX: number; tileY: number; offsetX: number; offsetY: number; scale: number }> {
+    const activity = await this.getRecentActivity(new Date(Date.now() - 3600 * 1000), 1);
+    if (activity.length > 0) {
+      return {
+        tileX: activity[0].tileX,
+        tileY: activity[0].tileY,
+        offsetX: 0.5,
+        offsetY: 0.5,
+        scale: 2048,
+      };
+    }
+    return {
+      tileX: 0,
+      tileY: 0,
+      offsetX: 0.5,
+      offsetY: 0.5,
+      scale: 2048,
+    };
+  }
+
+  async updateUserRulesVersion(userId: string, rulesVersion: number): Promise<void> {
+    await this.pool.query('UPDATE users SET rules_version = $2 WHERE id = $1', [userId, rulesVersion]);
   }
 
   async close(): Promise<void> {

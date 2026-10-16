@@ -30,6 +30,7 @@ export class PointerCapture {
   mode: InteractionMode = 'draw';
   currentColorIndex = 0;
   currentWidthIndex = 2; // Default 256 units (~8 CSS px at 2048)
+  isDrawingEnabled = true;
 
   private isSpaceDown = false;
   private activePointers: Map<number, { x: number; y: number; pointerType: string }> = new Map();
@@ -154,6 +155,9 @@ export class PointerCapture {
         (e.pointerType === 'mouse' && e.button !== 0);
 
       if (!isPanGesture) {
+        if (!this.isDrawingEnabled) {
+          return;
+        }
         // Start drawing
         this.drawingPointerId = e.pointerId;
         this.currentRawPath = [];

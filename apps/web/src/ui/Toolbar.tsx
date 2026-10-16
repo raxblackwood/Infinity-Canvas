@@ -8,9 +8,22 @@ interface Props {
   isReportSelecting?: boolean;
   onOpenReport?: () => void;
   onOpenAdmin?: () => void;
+  onOpenMap?: () => void;
+  onOpenExport?: () => void;
+  onOpenInfo?: () => void;
+  onShareLocation?: () => void;
 }
 
-export const Toolbar: React.FC<Props> = ({ engine, isReportSelecting, onOpenReport, onOpenAdmin }) => {
+export const Toolbar: React.FC<Props> = ({
+  engine,
+  isReportSelecting,
+  onOpenReport,
+  onOpenAdmin,
+  onOpenMap,
+  onOpenExport,
+  onOpenInfo,
+  onShareLocation,
+}) => {
   const [mode, setMode] = useState<InteractionMode>('draw');
   const [selectedColor, setSelectedColor] = useState(0);
   const [selectedWidth, setSelectedWidth] = useState(2); // default 256 units
@@ -97,6 +110,17 @@ export const Toolbar: React.FC<Props> = ({ engine, isReportSelecting, onOpenRepo
       return;
     }
     engine.network.sendUndo();
+  };
+
+  const handleShare = () => {
+    if (onShareLocation) {
+      onShareLocation();
+    } else {
+      navigator.clipboard
+        .writeText(window.location.href)
+        .then(() => showToastNotice('Location link copied to clipboard!'))
+        .catch(() => showToastNotice('Failed to copy link to clipboard'));
+    }
   };
 
   return (
@@ -440,6 +464,116 @@ export const Toolbar: React.FC<Props> = ({ engine, isReportSelecting, onOpenRepo
           <span>🎯</span>
           <span className="canvas-toolbar-btn-text">(0,0)</span>
         </button>
+
+        {/* Map Overlay Button */}
+        {onOpenMap && (
+          <button
+            onClick={onOpenMap}
+            data-testid="btn-map"
+            title="Open Activity Map & Radar"
+            style={{
+              padding: '6px 8px',
+              borderRadius: 14,
+              backgroundColor: '#F0F0F5',
+              color: '#1A1A1A',
+              border: 'none',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              flexShrink: 0,
+              userSelect: 'none',
+              touchAction: 'manipulation',
+            }}
+          >
+            <span>🗺️</span>
+            <span className="canvas-toolbar-btn-text">Map</span>
+          </button>
+        )}
+
+        {/* High-Res Export Button */}
+        {onOpenExport && (
+          <button
+            onClick={onOpenExport}
+            data-testid="btn-export"
+            title="Export High-Res PNG or SVG"
+            style={{
+              padding: '6px 8px',
+              borderRadius: 14,
+              backgroundColor: '#F0F0F5',
+              color: '#1A1A1A',
+              border: 'none',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              flexShrink: 0,
+              userSelect: 'none',
+              touchAction: 'manipulation',
+            }}
+          >
+            <span>🖼️</span>
+            <span className="canvas-toolbar-btn-text">Export</span>
+          </button>
+        )}
+
+        {/* Share Location Button */}
+        <button
+          onClick={handleShare}
+          data-testid="btn-share"
+          title="Share Location (Copy deep link with coordinates)"
+          style={{
+            padding: '6px 8px',
+            borderRadius: 14,
+            backgroundColor: '#F0F0F5',
+            color: '#1A1A1A',
+            border: 'none',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexShrink: 0,
+            userSelect: 'none',
+            touchAction: 'manipulation',
+          }}
+        >
+          <span>🔗</span>
+          <span className="canvas-toolbar-btn-text">Share</span>
+        </button>
+
+        {/* Info & Community Rules Button */}
+        {onOpenInfo && (
+          <button
+            onClick={onOpenInfo}
+            data-testid="btn-info"
+            title="Canvas Info & Community Rules"
+            style={{
+              padding: '6px 8px',
+              borderRadius: 14,
+              backgroundColor: '#F0F0F5',
+              color: '#1A1A1A',
+              border: 'none',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              flexShrink: 0,
+              userSelect: 'none',
+              touchAction: 'manipulation',
+            }}
+          >
+            <span>ℹ️</span>
+            <span className="canvas-toolbar-btn-text">Rules</span>
+          </button>
+        )}
 
         <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
 

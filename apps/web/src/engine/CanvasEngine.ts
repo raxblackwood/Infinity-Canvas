@@ -10,6 +10,7 @@ export interface CanvasEngineCallbacks {
   onStrokeCommitted?: (stroke: StoredStroke) => void;
   onConnectionChange?: (connected: boolean) => void;
   onTileSelectionChange?: (tiles: { tileX: number; tileY: number }[]) => void;
+  onCameraChange?: (camera: { tileX: number; tileY: number; offsetX: number; offsetY: number; scale: number }) => void;
 }
 
 export class CanvasEngine {
@@ -50,6 +51,13 @@ export class CanvasEngine {
       onCameraChanged: () => {
         this.renderer.markDirty();
         this.network.syncVisibleTiles();
+        this.callbacks.onCameraChange?.({
+          tileX: this.camera.tileX,
+          tileY: this.camera.tileY,
+          offsetX: this.camera.offsetX,
+          offsetY: this.camera.offsetY,
+          scale: this.camera.scale,
+        });
       },
       onSelectionBoxChanged: (box) => {
         this.renderer.setSelectionMarquee(box);
@@ -89,6 +97,10 @@ export class CanvasEngine {
     this.pointer.mode = mode;
   }
 
+  setDrawingEnabled(enabled: boolean): void {
+    this.pointer.isDrawingEnabled = enabled;
+  }
+
   setColor(index: number): void {
     this.pointer.currentColorIndex = index;
   }
@@ -100,6 +112,32 @@ export class CanvasEngine {
   setScale(scale: number): void {
     this.camera.setScale(scale, this.renderer.getViewport());
     this.renderer.markDirty();
+    this.callbacks.onCameraChange?.({
+      tileX: this.camera.tileX,
+      tileY: this.camera.tileY,
+      offsetX: this.camera.offsetX,
+      offsetY: this.camera.offsetY,
+      scale: this.camera.scale,
+    });
+  }
+
+  jumpTo(tileX: number, tileY: number, offsetX = 0.5, offsetY = 0.5, scale?: number): void {
+    this.camera.tileX = tileX;
+    this.camera.tileY = tileY;
+    this.camera.offsetX = offsetX;
+    this.camera.offsetY = offsetY;
+    if (scale !== undefined) {
+      this.camera.setScale(scale, this.renderer.getViewport());
+    }
+    this.renderer.markDirty();
+    this.network.syncVisibleTiles();
+    this.callbacks.onCameraChange?.({
+      tileX: this.camera.tileX,
+      tileY: this.camera.tileY,
+      offsetX: this.camera.offsetX,
+      offsetY: this.camera.offsetY,
+      scale: this.camera.scale,
+    });
   }
 
   addPredefinedStroke(stroke: StoredStroke): void {

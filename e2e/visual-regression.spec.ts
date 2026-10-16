@@ -52,7 +52,7 @@ test.describe('Phase 0 Visual Regression & Crispness', () => {
 
     const canvas = page.locator('canvas');
     await expect(canvas).toHaveScreenshot('canvas-scale-256-placeholder.png', {
-      threshold: 0.05,
+      maxDiffPixelRatio: 0.05,
     });
   });
 

@@ -1,0 +1,17 @@
+{
+  "name": "Infinite Canvas",
+  "short_name": "InfiniteCanvas",
+  "description": "Unbounded shared canvas with vector-sharp strokes at every zoom level",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FBFAF7",
+  "theme_color": "#5B5BD6",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

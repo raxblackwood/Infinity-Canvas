@@ -106,9 +106,40 @@ export async function createServer(
     };
   });
 
-  // Rules acceptance endpoint
+  // Rules acceptance endpoint (SPEC Section 7)
   app.post('/api/rules/accept', async (req, reply) => {
-    return { accepted: true, rulesVersion: 1 };
+    const authHeader = req.headers['authorization'];
+    let token = '';
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.slice(7).trim();
+    } else if ((req.query as any)?.token) {
+      token = (req.query as any).token;
+    }
+
+    const body = req.body as { rulesVersion?: number } | undefined;
+    const rulesVersion = body?.rulesVersion || 1;
+
+    if (token) {
+      const session = await sessionManager.resumeSession(token);
+      if (session) {
+        await storage.updateUserRulesVersion(session.user.id, rulesVersion);
+        return { accepted: true, rulesVersion, userId: session.user.id };
+      }
+    }
+    return { accepted: true, rulesVersion };
+  });
+
+  // Discovery: Spawn location endpoint (SPEC Section 7 & Phase 5)
+  app.get('/api/spawn', async () => {
+    return storage.getSpawnLocation();
+  });
+
+  // Discovery: Activity heatmap / busy spots endpoint (SPEC Section 7 & Phase 5)
+  app.get('/api/activity', async (req) => {
+    const query = req.query as { limit?: string; since?: string };
+    const limit = query.limit ? Math.min(100, Math.max(1, parseInt(query.limit, 10))) : 50;
+    const sinceTime = query.since ? new Date(query.since) : new Date(Date.now() - 3600 * 1000);
+    return storage.getRecentActivity(sinceTime, limit);
   });
 
   // Tile index endpoint (SPEC Section 5)
