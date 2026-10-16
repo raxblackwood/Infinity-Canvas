@@ -5,9 +5,10 @@ import { CanvasEngine } from '../engine/CanvasEngine.js';
 interface Props {
   stats: PerformanceStats;
   engine: CanvasEngine | null;
+  onClose?: () => void;
 }
 
-export const PerformanceHUD: React.FC<Props> = ({ stats, engine }) => {
+export const PerformanceHUD: React.FC<Props> = ({ stats, engine, onClose }) => {
   const [dpr, setDpr] = useState(1);
   const [isStressRunning, setIsStressRunning] = useState(false);
   const [stressProgress, setStressProgress] = useState(0);
@@ -209,11 +210,31 @@ export const PerformanceHUD: React.FC<Props> = ({ stats, engine }) => {
         lineHeight: 1.5,
       }}
     >
-      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, display: 'flex', justifyContent: 'space-between' }}>
+      <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span>Performance HUD</span>
-        <span style={{ color: stats.fps >= 55 ? '#2E7D32' : '#D32F2F', fontWeight: 800 }}>
-          {stats.fps} FPS
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ color: stats.fps >= 55 ? '#2E7D32' : '#D32F2F', fontWeight: 800 }}>
+            {stats.fps} FPS
+          </span>
+          {onClose && (
+            <button
+              onClick={onClose}
+              title="Close HUD (Press H to toggle)"
+              style={{
+                background: 'rgba(0,0,0,0.06)',
+                border: 'none',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 12,
+                color: '#666',
+                padding: '1px 5px',
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', marginBottom: 6 }}>

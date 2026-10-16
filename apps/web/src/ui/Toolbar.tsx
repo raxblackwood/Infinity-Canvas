@@ -175,19 +175,184 @@ export const Toolbar: React.FC<Props> = ({
         </div>
       )}
 
+      {/* Embedded CSS for Buttons and Responsive Layout */}
+      <style>{`
+        .canvas-glass-pill {
+          background-color: rgba(255, 255, 255, 0.90);
+          backdrop-filter: blur(16px);
+          -webkit-backdrop-filter: blur(16px);
+          border-radius: 20px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+          border: 1px solid rgba(0, 0, 0, 0.08);
+          display: flex;
+          align-items: center;
+          user-select: none;
+        }
+        .canvas-pill-btn {
+          background: transparent;
+          border: none;
+          border-radius: 12px;
+          padding: 6px 10px;
+          min-height: 34px;
+          font-size: 13px;
+          font-weight: 500;
+          color: #374151;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          cursor: pointer;
+          transition: background-color 150ms ease-out, transform 100ms ease-out;
+          touch-action: manipulation;
+        }
+        .canvas-pill-btn:hover {
+          background-color: rgba(0, 0, 0, 0.05);
+        }
+        .canvas-pill-btn:active {
+          transform: scale(0.96);
+        }
+        .canvas-divider {
+          width: 1px;
+          height: 18px;
+          background-color: rgba(0, 0, 0, 0.1);
+          margin: 0 2px;
+          flex-shrink: 0;
+        }
+        @media (max-width: 640px) {
+          .canvas-btn-label {
+            display: none !important;
+          }
+          .canvas-pill-btn {
+            padding: 6px 8px !important;
+          }
+          .canvas-glass-pill {
+            padding: 3px 4px !important;
+          }
+        }
+      `}</style>
+
+      {/* Top-Left Header: Rules & Admin */}
+      <div
+        className="canvas-glass-pill"
+        style={{
+          position: 'absolute',
+          top: 'max(14px, env(safe-area-inset-top, 14px))',
+          left: 'max(14px, env(safe-area-inset-left, 14px))',
+          padding: '4px 6px',
+          gap: 4,
+          zIndex: 80,
+        }}
+      >
+        {onOpenInfo && (
+          <button
+            onClick={onOpenInfo}
+            data-testid="btn-info"
+            title="Rules & Canvas Guide"
+            className="canvas-pill-btn"
+          >
+            <span style={{ fontSize: 15 }}>ℹ️</span>
+            <span className="canvas-btn-label">Rules</span>
+          </button>
+        )}
+
+        {onOpenAdmin && (
+          <>
+            <div className="canvas-divider" />
+            <button
+              onClick={onOpenAdmin}
+              data-testid="btn-admin"
+              title="Admin Dashboard"
+              className="canvas-pill-btn"
+              style={{ color: '#5B5BD6' }}
+            >
+              <span style={{ fontSize: 15 }}>🛡️</span>
+              <span className="canvas-btn-label">Admin</span>
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Top-Right Header: Map, Export, Share, Report */}
+      <div
+        className="canvas-glass-pill"
+        style={{
+          position: 'absolute',
+          top: 'max(14px, env(safe-area-inset-top, 14px))',
+          right: 'max(14px, env(safe-area-inset-right, 14px))',
+          padding: '4px 6px',
+          gap: 4,
+          zIndex: 80,
+        }}
+      >
+        {onOpenMap && (
+          <button
+            onClick={onOpenMap}
+            data-testid="btn-map"
+            title="Activity Map & Radar"
+            className="canvas-pill-btn"
+          >
+            <span style={{ fontSize: 15 }}>🗺️</span>
+            <span className="canvas-btn-label">Map</span>
+          </button>
+        )}
+
+        {onOpenExport && (
+          <button
+            onClick={onOpenExport}
+            data-testid="btn-export"
+            title="Export High-Res Image"
+            className="canvas-pill-btn"
+          >
+            <span style={{ fontSize: 15 }}>🖼️</span>
+            <span className="canvas-btn-label">Export</span>
+          </button>
+        )}
+
+        <button
+          onClick={handleShare}
+          data-testid="btn-share"
+          title="Share Location"
+          className="canvas-pill-btn"
+        >
+          <span style={{ fontSize: 15 }}>🔗</span>
+          <span className="canvas-btn-label">Share</span>
+        </button>
+
+        {onOpenReport && (
+          <>
+            <div className="canvas-divider" />
+            <button
+              onClick={onOpenReport}
+              data-testid="btn-report"
+              title="Report Content"
+              className="canvas-pill-btn"
+              style={{
+                backgroundColor: isReportSelecting ? '#FEE2E2' : 'transparent',
+                color: '#DC2626',
+              }}
+            >
+              <span style={{ fontSize: 15 }}>🚩</span>
+              <span className="canvas-btn-label">
+                {isReportSelecting ? 'Selecting...' : 'Report'}
+              </span>
+            </button>
+          </>
+        )}
+      </div>
+
       {/* Color Swatch Popover */}
       {showColorPicker && (
         <div
           style={{
             position: 'absolute',
-            bottom: 'calc(136px + env(safe-area-inset-bottom, 0px))',
+            bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))',
             left: '50%',
             transform: 'translateX(-50%)',
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(16px)',
-            borderRadius: 16,
+            backgroundColor: 'rgba(255, 255, 255, 0.96)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            borderRadius: 20,
             padding: 12,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            boxShadow: '0 12px 36px rgba(0,0,0,0.18)',
             border: '1px solid rgba(0,0,0,0.08)',
             display: 'grid',
             gridTemplateColumns: 'repeat(4, 38px)',
@@ -208,6 +373,7 @@ export const Toolbar: React.FC<Props> = ({
                 border: selectedColor === col.index ? '3px solid #5B5BD6' : '1px solid rgba(0,0,0,0.15)',
                 boxShadow: selectedColor === col.index ? '0 0 0 2px white' : 'none',
                 cursor: 'pointer',
+                transition: 'transform 100ms ease',
               }}
             />
           ))}
@@ -219,14 +385,15 @@ export const Toolbar: React.FC<Props> = ({
         <div
           style={{
             position: 'absolute',
-            bottom: 'calc(136px + env(safe-area-inset-bottom, 0px))',
+            bottom: 'calc(80px + env(safe-area-inset-bottom, 0px))',
             left: '50%',
             transform: 'translateX(-50%)',
-            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-            backdropFilter: 'blur(16px)',
-            borderRadius: 16,
+            backgroundColor: 'rgba(255, 255, 255, 0.96)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            borderRadius: 20,
             padding: '12px 16px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            boxShadow: '0 12px 36px rgba(0,0,0,0.18)',
             border: '1px solid rgba(0,0,0,0.08)',
             display: 'flex',
             alignItems: 'center',
@@ -266,51 +433,16 @@ export const Toolbar: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Responsive Styles for Mobile */}
-      <style>{`
-        .canvas-toolbar {
-          gap: 8px;
-          padding: 6px 14px;
-          max-width: calc(100vw - 16px);
-          overflow-x: auto;
-          scrollbar-width: none;
-          -ms-overflow-style: none;
-        }
-        .canvas-toolbar::-webkit-scrollbar {
-          display: none;
-        }
-        .canvas-toolbar-btn-text {
-          display: inline;
-        }
-        @media (max-width: 640px) {
-          .canvas-toolbar {
-            gap: 6px !important;
-            padding: 4px 8px !important;
-          }
-          .canvas-toolbar-btn-text {
-            display: none !important;
-          }
-          .canvas-toolbar-divider {
-            margin: 0 1px !important;
-          }
-        }
-      `}</style>
-
-      {/* Main Bottom Toolbar */}
+      {/* Primary Bottom Drawing Toolbar */}
       <div
-        className="canvas-toolbar"
+        className="canvas-glass-pill"
         style={{
           position: 'absolute',
-          bottom: 'calc(76px + env(safe-area-inset-bottom, 0px))',
+          bottom: 'calc(20px + env(safe-area-inset-bottom, 0px))',
           left: '50%',
           transform: 'translateX(-50%)',
-          backgroundColor: 'rgba(255, 255, 255, 0.92)',
-          backdropFilter: 'blur(16px)',
-          borderRadius: 24,
-          boxShadow: '0 4px 24px rgba(0,0,0,0.14)',
-          border: '1px solid rgba(0,0,0,0.08)',
-          display: 'flex',
-          alignItems: 'center',
+          padding: '6px 10px',
+          gap: 6,
           zIndex: 90,
           whiteSpace: 'nowrap',
         }}
@@ -323,11 +455,11 @@ export const Toolbar: React.FC<Props> = ({
             display: 'flex',
             alignItems: 'center',
             gap: 4,
-            padding: '4px 6px',
-            borderRadius: 12,
+            padding: '5px 8px',
+            borderRadius: 14,
             backgroundColor: ink < 20 ? 'rgba(239, 68, 68, 0.12)' : 'rgba(91, 91, 214, 0.08)',
-            fontSize: 12,
-            fontWeight: 600,
+            fontSize: 13,
+            fontWeight: 700,
             color: ink < 20 ? '#DC2626' : '#5B5BD6',
             flexShrink: 0,
           }}
@@ -336,38 +468,24 @@ export const Toolbar: React.FC<Props> = ({
           <span>{ink}</span>
         </div>
 
-        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
+        <div className="canvas-divider" />
 
         {/* Undo Button */}
         <button
           onClick={handleUndo}
           data-testid="btn-undo"
           title="Undo last stroke (within 30s)"
+          className="canvas-pill-btn"
           style={{
-            padding: '6px 8px',
-            minWidth: 32,
-            minHeight: 32,
-            borderRadius: 14,
             backgroundColor: '#F0F0F5',
-            color: '#1A1A1A',
-            border: 'none',
-            fontSize: 12,
             fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 4,
-            flexShrink: 0,
-            userSelect: 'none',
-            touchAction: 'manipulation',
           }}
         >
-          <span style={{ fontSize: 15, lineHeight: 1, fontWeight: 'bold' }}>↺</span>
-          <span className="canvas-toolbar-btn-text">Undo</span>
+          <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 'bold' }}>↺</span>
+          <span className="canvas-btn-label">Undo</span>
         </button>
 
-        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
+        <div className="canvas-divider" />
 
         {/* Color Button */}
         <button
@@ -377,18 +495,19 @@ export const Toolbar: React.FC<Props> = ({
           }}
           title="Choose Color"
           style={{
-            width: 30,
-            height: 30,
+            width: 32,
+            height: 32,
             borderRadius: '50%',
             backgroundColor: PALETTE[selectedColor]?.hex || '#1A1A1A',
             border: '2px solid #FFFFFF',
-            boxShadow: '0 0 0 1px rgba(0,0,0,0.2)',
+            boxShadow: '0 0 0 1.5px rgba(0,0,0,0.18)',
             cursor: 'pointer',
             flexShrink: 0,
+            transition: 'transform 100ms ease',
           }}
         />
 
-        {/* Size Button */}
+        {/* Brush Size Button */}
         <button
           onClick={() => {
             setShowSizePicker(!showSizePicker);
@@ -396,8 +515,8 @@ export const Toolbar: React.FC<Props> = ({
           }}
           title="Choose Brush Size"
           style={{
-            width: 30,
-            height: 30,
+            width: 32,
+            height: 32,
             borderRadius: '50%',
             backgroundColor: '#F4F4F6',
             border: '1px solid rgba(0,0,0,0.1)',
@@ -406,6 +525,7 @@ export const Toolbar: React.FC<Props> = ({
             justifyContent: 'center',
             cursor: 'pointer',
             flexShrink: 0,
+            transition: 'transform 100ms ease',
           }}
         >
           <div
@@ -418,220 +538,36 @@ export const Toolbar: React.FC<Props> = ({
           />
         </button>
 
-        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
+        <div className="canvas-divider" />
 
         {/* Draw / Move Toggle */}
         <button
           onClick={toggleMode}
           title={mode === 'draw' ? 'Switch to Move tool' : 'Switch to Draw tool'}
+          className="canvas-pill-btn"
           style={{
-            padding: '6px 10px',
-            borderRadius: 14,
             backgroundColor: mode === 'draw' ? '#5B5BD6' : '#F0F0F5',
             color: mode === 'draw' ? '#FFFFFF' : '#1A1A1A',
-            border: 'none',
             fontWeight: 600,
-            fontSize: 12,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 3,
-            flexShrink: 0,
           }}
         >
-          <span>{mode === 'draw' ? '✏️' : '✋'}</span>
-          <span className="canvas-toolbar-btn-text">{mode === 'draw' ? 'Draw' : 'Move'}</span>
+          <span style={{ fontSize: 15 }}>{mode === 'draw' ? '✏️' : '✋'}</span>
+          <span className="canvas-btn-label">{mode === 'draw' ? 'Draw' : 'Move'}</span>
         </button>
 
-        {/* Reset View */}
+        {/* Reset View Button */}
         <button
           onClick={resetView}
-          title="Reset View to Center (0, 0)"
+          title="Reset View to Origin (0, 0)"
+          className="canvas-pill-btn"
           style={{
-            padding: '6px 8px',
-            borderRadius: 14,
             backgroundColor: '#F0F0F5',
-            color: '#1A1A1A',
-            border: 'none',
-            fontSize: 12,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 2,
-            flexShrink: 0,
-          }}
-        >
-          <span>🎯</span>
-          <span className="canvas-toolbar-btn-text">(0,0)</span>
-        </button>
-
-        {/* Map Overlay Button */}
-        {onOpenMap && (
-          <button
-            onClick={onOpenMap}
-            data-testid="btn-map"
-            title="Open Activity Map & Radar"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 14,
-              backgroundColor: '#F0F0F5',
-              color: '#1A1A1A',
-              border: 'none',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexShrink: 0,
-              userSelect: 'none',
-              touchAction: 'manipulation',
-            }}
-          >
-            <span>🗺️</span>
-            <span className="canvas-toolbar-btn-text">Map</span>
-          </button>
-        )}
-
-        {/* High-Res Export Button */}
-        {onOpenExport && (
-          <button
-            onClick={onOpenExport}
-            data-testid="btn-export"
-            title="Export High-Res PNG or SVG"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 14,
-              backgroundColor: '#F0F0F5',
-              color: '#1A1A1A',
-              border: 'none',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexShrink: 0,
-              userSelect: 'none',
-              touchAction: 'manipulation',
-            }}
-          >
-            <span>🖼️</span>
-            <span className="canvas-toolbar-btn-text">Export</span>
-          </button>
-        )}
-
-        {/* Share Location Button */}
-        <button
-          onClick={handleShare}
-          data-testid="btn-share"
-          title="Share Location (Copy deep link with coordinates)"
-          style={{
-            padding: '6px 8px',
-            borderRadius: 14,
-            backgroundColor: '#F0F0F5',
-            color: '#1A1A1A',
-            border: 'none',
-            fontSize: 12,
             fontWeight: 600,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 2,
-            flexShrink: 0,
-            userSelect: 'none',
-            touchAction: 'manipulation',
           }}
         >
-          <span>🔗</span>
-          <span className="canvas-toolbar-btn-text">Share</span>
+          <span style={{ fontSize: 14 }}>🎯</span>
+          <span className="canvas-btn-label">(0,0)</span>
         </button>
-
-        {/* Info & Community Rules Button */}
-        {onOpenInfo && (
-          <button
-            onClick={onOpenInfo}
-            data-testid="btn-info"
-            title="Canvas Info & Community Rules"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 14,
-              backgroundColor: '#F0F0F5',
-              color: '#1A1A1A',
-              border: 'none',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexShrink: 0,
-              userSelect: 'none',
-              touchAction: 'manipulation',
-            }}
-          >
-            <span>ℹ️</span>
-            <span className="canvas-toolbar-btn-text">Rules</span>
-          </button>
-        )}
-
-        <div className="canvas-toolbar-divider" style={{ width: 1, height: 20, backgroundColor: '#E0E0E0', flexShrink: 0 }} />
-
-        {/* Report Button */}
-        {onOpenReport && (
-          <button
-            onClick={onOpenReport}
-            data-testid="btn-report"
-            title="Report inappropriate content in canvas"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 14,
-              backgroundColor: isReportSelecting ? '#FEE2E2' : '#F0F0F5',
-              color: '#DC2626',
-              border: isReportSelecting ? '1px solid #DC2626' : 'none',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexShrink: 0,
-              userSelect: 'none',
-              touchAction: 'manipulation',
-            }}
-          >
-            <span>🚩</span>
-            <span className="canvas-toolbar-btn-text">{isReportSelecting ? 'Selecting...' : 'Report'}</span>
-          </button>
-        )}
-
-        {/* Admin Dashboard Button */}
-        {onOpenAdmin && (
-          <button
-            onClick={onOpenAdmin}
-            data-testid="btn-admin"
-            title="Open Admin Dashboard"
-            style={{
-              padding: '6px 8px',
-              borderRadius: 14,
-              backgroundColor: '#F0F0F5',
-              color: '#5B5BD6',
-              border: 'none',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              flexShrink: 0,
-              userSelect: 'none',
-              touchAction: 'manipulation',
-            }}
-          >
-            <span>🛡️</span>
-            <span className="canvas-toolbar-btn-text">Admin</span>
-          </button>
-        )}
       </div>
     </>
   );

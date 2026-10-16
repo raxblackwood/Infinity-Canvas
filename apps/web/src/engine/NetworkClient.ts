@@ -38,7 +38,7 @@ export interface RemoteLiveStroke {
 export class NetworkClient {
   private ws: WebSocket | null = null;
   private engine: CanvasEngine;
-  private token: string | null = null;
+  public token: string | null = null;
   private isConnecting = false;
   private reconnectAttempts = 0;
   private reconnectTimeout: number | null = null;

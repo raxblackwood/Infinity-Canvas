@@ -44,6 +44,35 @@ export const App: React.FC = () => {
     );
   });
 
+  // Developer HUD hidden by default; enabled via ?debug=1, #debug, or pressing 'H'
+  const [showHUD, setShowHUD] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return (
+      window.location.search.includes('debug') ||
+      window.location.hash.includes('debug')
+    );
+  });
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === 'h' || e.key === 'H') {
+        setShowHUD((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const urlUpdateTimer = useRef<number | null>(null);
 
   // Debounced URL hash update for deep linking
@@ -175,7 +204,13 @@ export const App: React.FC = () => {
           touchAction: 'none',
         }}
       />
-      <PerformanceHUD stats={stats} engine={engine} />
+      {showHUD && (
+        <PerformanceHUD
+          stats={stats}
+          engine={engine}
+          onClose={() => setShowHUD(false)}
+        />
+      )}
 
       {/* Tile Selection Floating Banner */}
       {isSelectingReportTiles && !isReportOpen && (

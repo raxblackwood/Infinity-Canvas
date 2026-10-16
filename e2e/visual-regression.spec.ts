@@ -12,7 +12,10 @@ test.describe('Phase 0 Visual Regression & Crispness', () => {
           deviceScaleFactor: dpr,
         });
         const page = await context.newPage();
-        await page.goto('/');
+        await page.addInitScript(() => {
+          localStorage.setItem('rules_accepted_v1', 'true');
+        });
+        await page.goto('/?debug=1');
 
         // Wait for engine to initialize
         await page.waitForFunction(() => typeof (window as any).__CANVAS_ENGINE__ !== 'undefined');
@@ -40,6 +43,9 @@ test.describe('Phase 0 Visual Regression & Crispness', () => {
   }
 
   test('verifies low-zoom (< 512) placeholder display (Amendment 1)', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('rules_accepted_v1', 'true');
+    });
     await page.goto('/');
     await page.waitForFunction(() => typeof (window as any).__CANVAS_ENGINE__ !== 'undefined');
 
@@ -58,7 +64,10 @@ test.describe('Phase 0 Visual Regression & Crispness', () => {
   });
 
   test('verifies panning holds 60 fps and stays within memory budget', async ({ page }) => {
-    await page.goto('/');
+    await page.addInitScript(() => {
+      localStorage.setItem('rules_accepted_v1', 'true');
+    });
+    await page.goto('/?debug=1');
     await page.waitForFunction(() => typeof (window as any).__CANVAS_ENGINE__ !== 'undefined');
 
     await page.getByRole('button', { name: 'Load Test Strokes' }).click();

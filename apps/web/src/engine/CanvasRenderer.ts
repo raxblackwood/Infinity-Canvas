@@ -719,9 +719,9 @@ export class CanvasRenderer {
             const cp1y = (tileOffsetY + (b.cp1.y / TILE_UNITS) * 1024).toFixed(1);
             const cp2x = (tileOffsetX + (b.cp2.x / TILE_UNITS) * 1024).toFixed(1);
             const cp2y = (tileOffsetY + (b.cp2.y / TILE_UNITS) * 1024).toFixed(1);
-            const p3x = (tileOffsetX + (b.p3.x / TILE_UNITS) * 1024).toFixed(1);
-            const p3y = (tileOffsetY + (b.p3.y / TILE_UNITS) * 1024).toFixed(1);
-            d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p3x} ${p3y}`;
+            const p1x = (tileOffsetX + (b.p1.x / TILE_UNITS) * 1024).toFixed(1);
+            const p1y = (tileOffsetY + (b.p1.y / TILE_UNITS) * 1024).toFixed(1);
+            d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p1x} ${p1y}`;
           }
           pathStrings.push(
             `<path d="${d}" fill="none" stroke="${color}" stroke-width="${strokeWidthSvg.toFixed(1)}" stroke-linecap="round" stroke-linejoin="round" />`
