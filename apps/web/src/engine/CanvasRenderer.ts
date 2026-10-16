@@ -47,6 +47,7 @@ export class CanvasRenderer {
   private settleTimeout: number | null = null;
   private prevScale: number = DEFAULT_SCALE;
   private crossfadeState: { startTime: number; direction: 'toRaster' | 'toVector' } | null = null;
+  public showPhase0Placeholder = false;
 
   // Performance tracking
   private lastFrameTimestamp = performance.now();
@@ -225,7 +226,11 @@ export class CanvasRenderer {
       const k = Math.max(0, Math.min(12, Math.floor(Math.log2(1024 / (this.camera.scale * this.dpr)))));
       const renderedRasters = this.renderRasterTiles(k, 1);
       if (renderedRasters === 0) {
-        this.renderLowZoomPlaceholder();
+        if (this.showPhase0Placeholder) {
+          this.renderLowZoomPlaceholder();
+        } else {
+          visibleCellsCount = this.renderVectorCells(9, 1);
+        }
       }
     } else {
       visibleCellsCount = this.renderVectorCells(zqToRender ?? 11, 1);

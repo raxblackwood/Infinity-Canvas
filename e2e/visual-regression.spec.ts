@@ -45,6 +45,7 @@ test.describe('Phase 0 Visual Regression & Crispness', () => {
 
     // Click <512 scale stop (256)
     await page.evaluate(() => {
+      (window as any).__CANVAS_ENGINE__.renderer.showPhase0Placeholder = true;
       (window as any).__CANVAS_ENGINE__.setScale(256);
     });
 
