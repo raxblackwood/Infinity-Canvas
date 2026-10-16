@@ -80,9 +80,78 @@ export async function createServer(
     origin: '*',
   });
 
-  // Health checks
-  app.get('/healthz', async () => ({ status: 'ok' }));
-  app.get('/readyz', async () => ({ status: 'ready' }));
+  // Health & Observability (SPEC Section 12)
+  app.get('/healthz', async () => ({
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  }));
+
+  app.get('/readyz', async (req, reply) => {
+    try {
+      const stats = await storage.getStats();
+      return {
+        status: 'ready',
+        uptime: process.uptime(),
+        timestamp: Date.now(),
+        storage: 'ok',
+        stats,
+      };
+    } catch (err: any) {
+      reply.status(503);
+      return {
+        status: 'not_ready',
+        error: err?.message || 'Storage not reachable',
+      };
+    }
+  });
+
+  app.get('/metrics', async (req, reply) => {
+    const m = gatewayInstance
+      ? gatewayInstance.getMetrics()
+      : {
+          openConnections: 0,
+          totalStrokesCommitted: 0,
+          totalBytesOut: 0,
+          p50LatencyMs: 0,
+          p95LatencyMs: 0,
+          topSubscribedTiles: [],
+          rejectsByCode: {},
+        };
+    const mem = process.memoryUsage();
+
+    let text = `# HELP canvas_open_connections Current active WebSocket connections\n`;
+    text += `# TYPE canvas_open_connections gauge\n`;
+    text += `canvas_open_connections ${m.openConnections}\n\n`;
+
+    text += `# HELP canvas_strokes_total Total committed strokes\n`;
+    text += `# TYPE canvas_strokes_total counter\n`;
+    text += `canvas_strokes_total ${m.totalStrokesCommitted}\n\n`;
+
+    text += `# HELP canvas_bytes_out_total Total bytes sent over WebSockets\n`;
+    text += `# TYPE canvas_bytes_out_total counter\n`;
+    text += `canvas_bytes_out_total ${m.totalBytesOut}\n\n`;
+
+    text += `# HELP canvas_ack_latency_ms Commit to ACK latency\n`;
+    text += `# TYPE canvas_ack_latency_ms summary\n`;
+    text += `canvas_ack_latency_ms{quantile="0.5"} ${m.p50LatencyMs}\n`;
+    text += `canvas_ack_latency_ms{quantile="0.95"} ${m.p95LatencyMs}\n\n`;
+
+    text += `# HELP canvas_process_resident_memory_bytes Resident memory size in bytes\n`;
+    text += `# TYPE canvas_process_resident_memory_bytes gauge\n`;
+    text += `canvas_process_resident_memory_bytes ${mem.rss}\n\n`;
+
+    text += `# HELP canvas_process_heap_used_bytes Heap memory used in bytes\n`;
+    text += `# TYPE canvas_process_heap_used_bytes gauge\n`;
+    text += `canvas_process_heap_used_bytes ${mem.heapUsed}\n\n`;
+
+    for (const [code, count] of Object.entries(m.rejectsByCode)) {
+      text += `canvas_rejects_total{code="${code}"} ${count}\n`;
+    }
+
+    reply.header('Content-Type', 'text/plain; version=0.0.4');
+    return text;
+  });
 
   // Anonymous session endpoint (SPEC Section 5)
   app.post('/api/session', async (req, reply) => {

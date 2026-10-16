@@ -9,14 +9,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "loadtest": "tsx scripts/loadtest-swarm.ts",
+    "backup:drill": "tsx scripts/backup-restore-drill.ts",
     "lint": "eslint . --ext .ts,.tsx"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
     "@resvg/resvg-js": "^2.6.2",
+    "@types/ws": "^8.18.2",
     "sharp": "^0.35.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.4.5",
-    "vitest": "^1.6.0"
+    "vitest": "^1.6.0",
+    "ws": "^8.22.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

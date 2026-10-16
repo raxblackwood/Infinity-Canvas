@@ -51,6 +51,12 @@ export class WebSocketGateway {
   public inkManager = new InkManager();
   public isReadOnly = false;
 
+  // Observability & Metrics (SPEC Section 12)
+  public totalBytesOut = 0;
+  public totalStrokesCommitted = 0;
+  public rejectsByCode: Map<number, number> = new Map();
+  private recentLatencies: number[] = [];
+
   constructor(wss: WebSocketServer, storage: Storage, sessionManager: SessionManager) {
     this.wss = wss;
     this.storage = storage;
@@ -59,6 +65,51 @@ export class WebSocketGateway {
     this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
       this.onConnection(ws, req);
     });
+  }
+
+  public sendTo(ws: WebSocket, buf: Uint8Array): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(buf);
+      this.totalBytesOut += buf.length;
+    }
+  }
+
+  public recordLatency(ms: number): void {
+    this.recentLatencies.push(ms);
+    if (this.recentLatencies.length > 500) {
+      this.recentLatencies.shift();
+    }
+  }
+
+  public recordReject(code: number): void {
+    this.rejectsByCode.set(code, (this.rejectsByCode.get(code) || 0) + 1);
+  }
+
+  public getMetrics() {
+    const latencies = [...this.recentLatencies].sort((a, b) => a - b);
+    const p50 = latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.5)] : 0;
+    const p95 = latencies.length > 0 ? latencies[Math.floor(latencies.length * 0.95)] : 0;
+
+    const tileSubs: { tile: string; subscribers: number }[] = [];
+    for (const [tile, subs] of this.tileSubscribers.entries()) {
+      tileSubs.push({ tile, subscribers: subs.size });
+    }
+    tileSubs.sort((a, b) => b.subscribers - a.subscribers);
+
+    const rejects: Record<number, number> = {};
+    for (const [code, count] of this.rejectsByCode.entries()) {
+      rejects[code] = count;
+    }
+
+    return {
+      openConnections: this.clients.size,
+      totalStrokesCommitted: this.totalStrokesCommitted,
+      totalBytesOut: this.totalBytesOut,
+      p50LatencyMs: p50,
+      p95LatencyMs: p95,
+      topSubscribedTiles: tileSubs.slice(0, 10),
+      rejectsByCode: rejects,
+    };
   }
 
   private onConnection = (ws: WebSocket, req: IncomingMessage): void => {
@@ -258,11 +309,13 @@ export class WebSocketGateway {
       }
 
       case WsMessageType.STROKE_COMMIT: {
+        const commitStart = Date.now();
         const commit = decodeClientStrokeCommit(buf);
         client.previewLimiter.endPreview(commit.clientStrokeId);
 
         if (this.isReadOnly) {
-          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.READ_ONLY));
+          this.recordReject(ErrorCode.READ_ONLY);
+          this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.READ_ONLY));
           return;
         }
 
@@ -271,7 +324,8 @@ export class WebSocketGateway {
         try {
           decodedStroke = decodeStroke(commit.strokeBytes);
         } catch {
-          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
+          this.recordReject(ErrorCode.BAD_STROKE);
+          this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
           return;
         }
 
@@ -283,14 +337,16 @@ export class WebSocketGateway {
           decodedStroke.widthIndex < 0 ||
           decodedStroke.widthIndex > 5
         ) {
-          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
+          this.recordReject(ErrorCode.BAD_STROKE);
+          this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
           return;
         }
 
         // Validate all coordinates are strictly within tile bounds [0, 65535]
         for (const pt of decodedStroke.points) {
           if (pt.x < 0 || pt.x > 65535 || pt.y < 0 || pt.y > 65535) {
-            client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
+            this.recordReject(ErrorCode.BAD_STROKE);
+            this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
             return;
           }
         }
@@ -298,7 +354,8 @@ export class WebSocketGateway {
         // Check tile freeze
         const tile = await this.storage.getTile(commit.tileX, commit.tileY);
         if (tile.frozen) {
-          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.TILE_FULL));
+          this.recordReject(ErrorCode.TILE_FULL);
+          this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.TILE_FULL));
           return;
         }
 
@@ -306,7 +363,8 @@ export class WebSocketGateway {
         const inkBucket = this.inkManager.getBucket(client.user.id);
         const inkCheck = inkBucket.tryConsume(decodedStroke.points.length);
         if (!inkCheck.allowed) {
-          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.INK_EMPTY));
+          this.recordReject(ErrorCode.INK_EMPTY);
+          this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.INK_EMPTY));
           return;
         }
 
@@ -319,8 +377,11 @@ export class WebSocketGateway {
             commit.strokeBytes
           );
 
+          this.totalStrokesCommitted++;
+          this.recordLatency(Date.now() - commitStart);
+
           // 1. Send ACK to author with remaining ink
-          client.ws.send(encodeServerStrokeAck(commit.clientStrokeId, saveResult.id, inkCheck.remaining));
+          this.sendTo(client.ws, encodeServerStrokeAck(commit.clientStrokeId, saveResult.id, inkCheck.remaining));
 
           // 2. Broadcast TILE_DELTA to all subscribers of this tile
           const tileKey = `${commit.tileX},${commit.tileY}`;
@@ -330,9 +391,7 @@ export class WebSocketGateway {
               { id: saveResult.id, strokeBytes: commit.strokeBytes },
             ]);
             for (const s of subs) {
-              if (s.ws.readyState === WebSocket.OPEN) {
-                s.ws.send(deltaBuf);
-              }
+              this.sendTo(s.ws, deltaBuf);
             }
 
             // End active preview if one was open
@@ -341,8 +400,8 @@ export class WebSocketGateway {
               client.activePreviews.delete(commit.clientStrokeId);
               const liveEndBuf = encodeServerLiveEnd(liveId, saveResult.id);
               for (const s of subs) {
-                if (s !== client && s.liveSubscriptions.has(tileKey) && s.ws.readyState === WebSocket.OPEN) {
-                  s.ws.send(liveEndBuf);
+                if (s !== client && s.liveSubscriptions.has(tileKey)) {
+                  this.sendTo(s.ws, liveEndBuf);
                 }
               }
             }
@@ -351,16 +410,15 @@ export class WebSocketGateway {
             if (saveResult.frozen) {
               const frozenBuf = encodeServerTileFrozen(commit.tileX, commit.tileY);
               for (const s of subs) {
-                if (s.ws.readyState === WebSocket.OPEN) {
-                  s.ws.send(frozenBuf);
-                }
+                this.sendTo(s.ws, frozenBuf);
               }
             }
           }
         } catch {
           // Refund ink consumed if save failed
           inkBucket.refund(decodedStroke.points.length);
-          client.ws.send(encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
+          this.recordReject(ErrorCode.BAD_STROKE);
+          this.sendTo(client.ws, encodeServerStrokeReject(commit.clientStrokeId, ErrorCode.BAD_STROKE));
         }
         break;
       }
