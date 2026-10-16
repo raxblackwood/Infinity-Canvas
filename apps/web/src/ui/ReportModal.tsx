@@ -4,11 +4,12 @@ import { CanvasEngine } from '../engine/CanvasEngine.js';
 interface Props {
   engine: CanvasEngine | null;
   isOpen: boolean;
+  tiles?: { tileX: number; tileY: number }[];
   onClose: () => void;
   onSuccess: (autoQuarantined: boolean) => void;
 }
 
-export const ReportModal: React.FC<Props> = ({ engine, isOpen, onClose, onSuccess }) => {
+export const ReportModal: React.FC<Props> = ({ engine, isOpen, tiles: propTiles, onClose, onSuccess }) => {
   const [reason, setReason] = useState('inappropriate_content');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -16,8 +17,11 @@ export const ReportModal: React.FC<Props> = ({ engine, isOpen, onClose, onSucces
 
   if (!isOpen) return null;
 
-  const tileX = engine?.camera.tileX ?? 0;
-  const tileY = engine?.camera.tileY ?? 0;
+  const tilesToReport: { tileX: number; tileY: number }[] =
+    propTiles && propTiles.length > 0
+      ? propTiles
+      : [{ tileX: engine?.camera.tileX ?? 0, tileY: engine?.camera.tileY ?? 0 }];
+
   const pointX = Math.round((engine?.camera.offsetX ?? 0.5) * 65535);
   const pointY = Math.round((engine?.camera.offsetY ?? 0.5) * 65535);
 
@@ -33,8 +37,9 @@ export const ReportModal: React.FC<Props> = ({ engine, isOpen, onClose, onSucces
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          tileX,
-          tileY,
+          tiles: tilesToReport,
+          tileX: tilesToReport[0]?.tileX,
+          tileY: tilesToReport[0]?.tileY,
           pointX,
           pointY,
           reason,
@@ -112,9 +117,47 @@ export const ReportModal: React.FC<Props> = ({ engine, isOpen, onClose, onSucces
           </button>
         </div>
 
-        <p style={{ margin: 0, fontSize: 13, color: '#666', lineHeight: 1.4 }}>
-          Reporting tile <strong>({tileX}, {tileY})</strong>. Our team reviews all reports. Multiple reports in this area will trigger immediate automatic quarantine.
-        </p>
+        <div>
+          <p style={{ margin: 0, fontSize: 13, color: '#666', lineHeight: 1.4 }}>
+            Reporting{' '}
+            <strong>
+              {tilesToReport.length === 1
+                ? `tile (${tilesToReport[0].tileX}, ${tilesToReport[0].tileY})`
+                : `${tilesToReport.length} selected tiles`}
+            </strong>
+            . Our team reviews all reports. Multiple reports in this area will trigger immediate automatic quarantine.
+          </p>
+
+          {tilesToReport.length > 1 && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                marginTop: 8,
+                maxHeight: 70,
+                overflowY: 'auto',
+                padding: '4px 0',
+              }}
+            >
+              {tilesToReport.map((t) => (
+                <span
+                  key={`${t.tileX},${t.tileY}`}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    backgroundColor: '#FEE2E2',
+                    color: '#DC2626',
+                  }}
+                >
+                  ({t.tileX}, {t.tileY})
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
 
         {error && (
           <div style={{ padding: '8px 12px', borderRadius: 8, backgroundColor: '#FEE2E2', color: '#DC2626', fontSize: 13 }}>

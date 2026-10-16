@@ -246,4 +246,89 @@ describe('Phase 4: Moderation & Admin Tooling', () => {
     expect(statsData.stats).toHaveProperty('openReports');
     expect(statsData.stats).toHaveProperty('reviewQueueDepth');
   });
+
+  it('supports reporting multiple tiles at once and triggers quarantine across all reported tiles', async () => {
+    const { ws, token } = await connectClient();
+
+    // Subscribe to tiles (20, 20) and (20, 21)
+    ws.send(
+      encodeClientSubscribe([
+        { tileX: 20, tileY: 20, sinceStrokeId: 0, live: true },
+        { tileX: 20, tileY: 21, sinceStrokeId: 0, live: true },
+      ])
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Draw strokes on both tiles
+    const s1 = encodeStroke(1, 1, [
+      { x: 100, y: 100, p: 0.5 },
+      { x: 200, y: 200, p: 0.5 },
+    ]);
+    const s2 = encodeStroke(1, 1, [
+      { x: 300, y: 300, p: 0.5 },
+      { x: 400, y: 400, p: 0.5 },
+    ]);
+    ws.send(encodeClientStrokeCommit(1, 20, 20, s1));
+    ws.send(encodeClientStrokeCommit(2, 20, 21, s2));
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Multi-tile report with array of tiles
+    const res1 = await fetch(`http://localhost:${port}/api/reports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        tiles: [
+          { tileX: 20, tileY: 20 },
+          { tileX: 20, tileY: 21 },
+        ],
+        reason: 'vandalism',
+        note: 'Graffiti across tiles',
+      }),
+    });
+    const data1 = await res1.json();
+    expect(data1.success).toBe(true);
+    expect(data1.count).toBe(2);
+    expect(data1.reportIds.length).toBe(2);
+
+    // Multi-tile report with bounding box (minTx, minTy to maxTx, maxTy)
+    const res2 = await fetch(`http://localhost:${port}/api/reports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        minTx: 20,
+        minTy: 20,
+        maxTx: 20,
+        maxTy: 21,
+        reason: 'hate_speech',
+      }),
+    });
+    const data2 = await res2.json();
+    expect(data2.success).toBe(true);
+    expect(data2.count).toBe(2);
+
+    // 3rd report triggers auto-quarantine for both tiles
+    const res3 = await fetch(`http://localhost:${port}/api/reports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tiles: [
+          { tileX: 20, tileY: 20 },
+          { tileX: 20, tileY: 21 },
+        ],
+        reason: 'inappropriate_content',
+      }),
+    });
+    const data3 = await res3.json();
+    expect(data3.success).toBe(true);
+    expect(data3.autoQuarantined).toBe(true);
+    expect(data3.quarantinedTiles.length).toBe(2);
+
+    // Verify both tiles have strokes quarantined
+    const visible1 = await storage.getVisibleStrokesForTile(20, 20);
+    const visible2 = await storage.getVisibleStrokesForTile(20, 21);
+    expect(visible1.length).toBe(0);
+    expect(visible2.length).toBe(0);
+
+    ws.close();
+  });
 });

@@ -5,11 +5,12 @@ import { InteractionMode } from '../engine/PointerCapture.js';
 
 interface Props {
   engine: CanvasEngine | null;
+  isReportSelecting?: boolean;
   onOpenReport?: () => void;
   onOpenAdmin?: () => void;
 }
 
-export const Toolbar: React.FC<Props> = ({ engine, onOpenReport, onOpenAdmin }) => {
+export const Toolbar: React.FC<Props> = ({ engine, isReportSelecting, onOpenReport, onOpenAdmin }) => {
   const [mode, setMode] = useState<InteractionMode>('draw');
   const [selectedColor, setSelectedColor] = useState(0);
   const [selectedWidth, setSelectedWidth] = useState(2); // default 256 units
@@ -447,13 +448,13 @@ export const Toolbar: React.FC<Props> = ({ engine, onOpenReport, onOpenAdmin }) 
           <button
             onClick={onOpenReport}
             data-testid="btn-report"
-            title="Report inappropriate content in current view"
+            title="Report inappropriate content in canvas"
             style={{
               padding: '6px 8px',
               borderRadius: 14,
-              backgroundColor: '#F0F0F5',
+              backgroundColor: isReportSelecting ? '#FEE2E2' : '#F0F0F5',
               color: '#DC2626',
-              border: 'none',
+              border: isReportSelecting ? '1px solid #DC2626' : 'none',
               fontSize: 12,
               fontWeight: 600,
               cursor: 'pointer',
@@ -466,7 +467,7 @@ export const Toolbar: React.FC<Props> = ({ engine, onOpenReport, onOpenAdmin }) 
             }}
           >
             <span>🚩</span>
-            <span className="canvas-toolbar-btn-text">Report</span>
+            <span className="canvas-toolbar-btn-text">{isReportSelecting ? 'Selecting...' : 'Report'}</span>
           </button>
         )}
 

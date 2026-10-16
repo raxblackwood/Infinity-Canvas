@@ -79,6 +79,10 @@ export class CanvasRenderer {
     points: { x: number; y: number }[];
   }[];
 
+  // Tile Selection Overlay (Phase 4 Moderation)
+  public selectedTiles: Set<string> = new Set();
+  public selectionMarquee: { startX: number; startY: number; currentX: number; currentY: number } | null = null;
+
   constructor(canvas: HTMLCanvasElement, camera: Camera, isMobile = false) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false })!;
@@ -240,6 +244,16 @@ export class CanvasRenderer {
           this.renderLiveStroke(remote);
         }
       }
+    }
+
+    // Render selected tiles overlay (Phase 4 Moderation & Tile Selection)
+    if (this.selectedTiles.size > 0) {
+      this.renderSelectedTilesOverlay();
+    }
+
+    // Render active drag selection marquee
+    if (this.selectionMarquee) {
+      this.renderSelectionMarquee(this.selectionMarquee);
     }
 
     const frameEnd = performance.now();
@@ -526,6 +540,96 @@ export class CanvasRenderer {
       cx,
       cy + 16 * this.dpr
     );
+    this.ctx.restore();
+  }
+
+  setSelectedTiles(tiles: { tileX: number; tileY: number }[]): void {
+    this.selectedTiles.clear();
+    for (const t of tiles) {
+      this.selectedTiles.add(`${t.tileX},${t.tileY}`);
+    }
+    this.markDirty();
+  }
+
+  setSelectionMarquee(marquee: { startX: number; startY: number; currentX: number; currentY: number } | null): void {
+    this.selectionMarquee = marquee;
+    this.markDirty();
+  }
+
+  private renderSelectedTilesOverlay(): void {
+    const viewport = this.getViewport();
+    this.ctx.save();
+
+    for (const key of this.selectedTiles) {
+      const [txStr, tyStr] = key.split(',');
+      const tx = parseInt(txStr, 10);
+      const ty = parseInt(tyStr, 10);
+
+      const pTopLeft = tilePositionToScreen(tx, ty, 0, 0, this.camera, viewport);
+      const pBottomRight = tilePositionToScreen(tx, ty, 65535, 65535, this.camera, viewport);
+
+      const x = pTopLeft.x * this.dpr;
+      const y = pTopLeft.y * this.dpr;
+      const w = (pBottomRight.x - pTopLeft.x) * this.dpr;
+      const h = (pBottomRight.y - pTopLeft.y) * this.dpr;
+
+      if (x + w < 0 || x > this.canvas.width || y + h < 0 || y > this.canvas.height) {
+        continue;
+      }
+
+      // Semi-transparent red highlight
+      this.ctx.fillStyle = 'rgba(239, 68, 68, 0.22)';
+      this.ctx.fillRect(x, y, w, h);
+
+      // Red dashed border
+      this.ctx.strokeStyle = '#DC2626';
+      this.ctx.lineWidth = 2.5 * this.dpr;
+      this.ctx.setLineDash([8 * this.dpr, 5 * this.dpr]);
+      this.ctx.strokeRect(x, y, w, h);
+      this.ctx.setLineDash([]);
+
+      // Tile label badge
+      const badgeText = `Tile (${tx}, ${ty})`;
+      this.ctx.font = `bold ${Math.max(11, Math.round(13 * this.dpr))}px -apple-system, BlinkMacSystemFont, sans-serif`;
+      const textMetrics = this.ctx.measureText(badgeText);
+      const badgeW = textMetrics.width + 16 * this.dpr;
+      const badgeH = 24 * this.dpr;
+
+      this.ctx.fillStyle = '#DC2626';
+      this.ctx.beginPath();
+      if (typeof (this.ctx as any).roundRect === 'function') {
+        (this.ctx as any).roundRect(x + 8 * this.dpr, y + 8 * this.dpr, badgeW, badgeH, 6 * this.dpr);
+      } else {
+        this.ctx.rect(x + 8 * this.dpr, y + 8 * this.dpr, badgeW, badgeH);
+      }
+      this.ctx.fill();
+
+      this.ctx.fillStyle = '#FFFFFF';
+      this.ctx.textBaseline = 'middle';
+      this.ctx.fillText(badgeText, x + 16 * this.dpr, y + 8 * this.dpr + badgeH / 2);
+    }
+
+    this.ctx.restore();
+  }
+
+  private renderSelectionMarquee(box: { startX: number; startY: number; currentX: number; currentY: number }): void {
+    this.ctx.save();
+
+    const minX = Math.min(box.startX, box.currentX) * this.dpr;
+    const maxX = Math.max(box.startX, box.currentX) * this.dpr;
+    const minY = Math.min(box.startY, box.currentY) * this.dpr;
+    const maxY = Math.max(box.startY, box.currentY) * this.dpr;
+    const w = maxX - minX;
+    const h = maxY - minY;
+
+    this.ctx.fillStyle = 'rgba(220, 38, 38, 0.15)';
+    this.ctx.fillRect(minX, minY, w, h);
+
+    this.ctx.strokeStyle = '#DC2626';
+    this.ctx.lineWidth = 1.5 * this.dpr;
+    this.ctx.setLineDash([5 * this.dpr, 4 * this.dpr]);
+    this.ctx.strokeRect(minX, minY, w, h);
+
     this.ctx.restore();
   }
 

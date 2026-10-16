@@ -197,41 +197,86 @@ export async function createServer(
     }
 
     const body = req.body as {
-      tileX: number;
-      tileY: number;
+      tiles?: { tileX: number; tileY: number }[];
+      minTx?: number;
+      minTy?: number;
+      maxTx?: number;
+      maxTy?: number;
+      tileX?: number;
+      tileY?: number;
       pointX?: number;
       pointY?: number;
       reason: string;
       note?: string;
     };
 
-    if (body.tileX === undefined || body.tileY === undefined || !body.reason) {
+    if (!body?.reason) {
       reply.status(400);
-      return { error: 'tileX, tileY, and reason are required' };
+      return { error: 'reason is required' };
     }
 
-    const res = await storage.createReport(
-      body.tileX,
-      body.tileY,
-      body.pointX ?? 32768,
-      body.pointY ?? 32768,
-      session.user.id,
-      body.reason,
-      body.note
-    );
+    const tilesToReport: { tileX: number; tileY: number }[] = [];
+    if (body.tiles && Array.isArray(body.tiles) && body.tiles.length > 0) {
+      tilesToReport.push(...body.tiles);
+    } else if (
+      body.minTx !== undefined &&
+      body.minTy !== undefined &&
+      body.maxTx !== undefined &&
+      body.maxTy !== undefined
+    ) {
+      const minTx = Math.min(body.minTx, body.maxTx);
+      const maxTx = Math.max(body.minTx, body.maxTx);
+      const minTy = Math.min(body.minTy, body.maxTy);
+      const maxTy = Math.max(body.minTy, body.maxTy);
+      for (let ty = minTy; ty <= maxTy; ty++) {
+        for (let tx = minTx; tx <= maxTx; tx++) {
+          tilesToReport.push({ tileX: tx, tileY: ty });
+        }
+      }
+    } else if (body.tileX !== undefined && body.tileY !== undefined) {
+      tilesToReport.push({ tileX: body.tileX, tileY: body.tileY });
+    }
 
-    if (res.autoQuarantined && res.affectedTile && res.quarantinedIds) {
-      await moderationService.handleReportQuarantine(
-        res.affectedTile.tileX,
-        res.affectedTile.tileY,
-        res.quarantinedIds
+    if (tilesToReport.length === 0) {
+      reply.status(400);
+      return { error: 'At least one tile must be specified to report' };
+    }
+
+    // Limit to max 64 tiles in a single report
+    const cappedTiles = tilesToReport.slice(0, 64);
+    const reportIds: number[] = [];
+    let anyAutoQuarantined = false;
+    const quarantinedTiles: { tileX: number; tileY: number }[] = [];
+
+    for (const t of cappedTiles) {
+      const res = await storage.createReport(
+        t.tileX,
+        t.tileY,
+        body.pointX ?? 32768,
+        body.pointY ?? 32768,
+        session.user.id,
+        body.reason,
+        body.note
       );
+      reportIds.push(res.report.id);
+      if (res.autoQuarantined && res.affectedTile && res.quarantinedIds) {
+        anyAutoQuarantined = true;
+        quarantinedTiles.push(res.affectedTile);
+        await moderationService.handleReportQuarantine(
+          res.affectedTile.tileX,
+          res.affectedTile.tileY,
+          res.quarantinedIds
+        );
+      }
     }
 
     return {
       success: true,
-      reportId: res.report.id,
-      autoQuarantined: res.autoQuarantined,
+      reportId: reportIds[0],
+      reportIds,
+      count: reportIds.length,
+      autoQuarantined: anyAutoQuarantined,
+      quarantinedTiles,
     };
   });
 

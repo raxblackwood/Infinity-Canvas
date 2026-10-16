@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Phase 4 Moderation & Admin Tooling E2E', () => {
   test.describe.configure({ mode: 'serial' });
 
-  test('user report modal opens, accepts report, and submits to server', async ({ page }) => {
+  test('user report flow: enters selection mode, confirms selection, and submits report', async ({ page }) => {
     await page.goto('/');
 
     await page.waitForFunction(() => typeof (window as any).__CANVAS_ENGINE__ !== 'undefined');
@@ -14,8 +14,16 @@ test.describe('Phase 4 Moderation & Admin Tooling E2E', () => {
     const reportBtn = page.getByTestId('btn-report');
     await expect(reportBtn).toBeVisible();
 
-    // Click report button to open modal
+    // Click report button to enter tile selection mode
     await reportBtn.click();
+
+    const selectionBar = page.getByTestId('tile-selection-bar');
+    await expect(selectionBar).toBeVisible();
+
+    // Confirm reporting selected tile(s)
+    const confirmBtn = page.getByTestId('btn-confirm-report-selection');
+    await expect(confirmBtn).toBeVisible();
+    await confirmBtn.click();
 
     const reportModal = page.getByTestId('report-modal');
     await expect(reportModal).toBeVisible();
@@ -32,8 +40,63 @@ test.describe('Phase 4 Moderation & Admin Tooling E2E', () => {
     const submitBtn = page.getByTestId('submit-report-btn');
     await submitBtn.click();
 
-    // Modal should close upon successful report
+    // Modal and selection bar should close upon successful report
     await expect(reportModal).not.toBeVisible();
+    await expect(selectionBar).not.toBeVisible();
+  });
+
+  test('drag-selecting multiple tiles highlights them and submits multi-tile report', async ({ page }) => {
+    await page.goto('/');
+
+    await page.waitForFunction(() => typeof (window as any).__CANVAS_ENGINE__ !== 'undefined');
+    await page.waitForFunction(() => (window as any).__CANVAS_ENGINE__.network.isConnected);
+
+    // Click Report button to enter selection mode
+    const reportBtn = page.getByTestId('btn-report');
+    await expect(reportBtn).toBeVisible();
+    await reportBtn.click();
+
+    // Verify tile selection floating bar is visible
+    const selectionBar = page.getByTestId('tile-selection-bar');
+    await expect(selectionBar).toBeVisible();
+
+    // Drag-select across canvas to select multiple tiles
+    const canvas = page.locator('canvas');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+
+    const startX = box!.x + 400;
+    const startY = box!.y + 300;
+
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + 300, startY + 300, { steps: 5 });
+    await page.mouse.up();
+
+    // Verify tiles were selected
+    await page.waitForFunction(() => {
+      const eng = (window as any).__CANVAS_ENGINE__;
+      return eng && eng.getSelectedTiles().length >= 1;
+    });
+
+    const selectedCount = await page.evaluate(() => (window as any).__CANVAS_ENGINE__.getSelectedTiles().length);
+    expect(selectedCount).toBeGreaterThanOrEqual(1);
+
+    // Click Confirm Report button
+    const confirmBtn = page.getByTestId('btn-confirm-report-selection');
+    await expect(confirmBtn).toBeVisible();
+    await confirmBtn.click();
+
+    // Verify Report Modal is open
+    const reportModal = page.getByTestId('report-modal');
+    await expect(reportModal).toBeVisible();
+
+    // Submit report
+    const submitBtn = page.getByTestId('submit-report-btn');
+    await submitBtn.click();
+
+    await expect(reportModal).not.toBeVisible();
+    await expect(selectionBar).not.toBeVisible();
   });
 
   test('admin dashboard can be opened, displays tabs, controls, and executes actions', async ({ page }) => {

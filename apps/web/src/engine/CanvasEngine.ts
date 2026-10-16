@@ -9,6 +9,7 @@ export interface CanvasEngineCallbacks {
   onStatsUpdate?: (stats: PerformanceStats) => void;
   onStrokeCommitted?: (stroke: StoredStroke) => void;
   onConnectionChange?: (connected: boolean) => void;
+  onTileSelectionChange?: (tiles: { tileX: number; tileY: number }[]) => void;
 }
 
 export class CanvasEngine {
@@ -49,6 +50,15 @@ export class CanvasEngine {
       onCameraChanged: () => {
         this.renderer.markDirty();
         this.network.syncVisibleTiles();
+      },
+      onSelectionBoxChanged: (box) => {
+        this.renderer.setSelectionMarquee(box);
+      },
+      onTileClicked: (tileX, tileY) => {
+        this.toggleTileSelection(tileX, tileY);
+      },
+      onTileRangeSelected: (minTx, minTy, maxTx, maxTy) => {
+        this.addTileSelectionRange(minTx, minTy, maxTx, maxTy);
       },
     });
 
@@ -94,6 +104,48 @@ export class CanvasEngine {
 
   addPredefinedStroke(stroke: StoredStroke): void {
     this.renderer.addStroke(stroke);
+  }
+
+  getSelectedTiles(): { tileX: number; tileY: number }[] {
+    const res: { tileX: number; tileY: number }[] = [];
+    for (const key of this.renderer.selectedTiles) {
+      const [tx, ty] = key.split(',').map(Number);
+      res.push({ tileX: tx, tileY: ty });
+    }
+    return res;
+  }
+
+  setSelectedTiles(tiles: { tileX: number; tileY: number }[]): void {
+    this.renderer.setSelectedTiles(tiles);
+    this.callbacks.onTileSelectionChange?.(this.getSelectedTiles());
+  }
+
+  toggleTileSelection(tileX: number, tileY: number): void {
+    const key = `${tileX},${tileY}`;
+    if (this.renderer.selectedTiles.has(key)) {
+      this.renderer.selectedTiles.delete(key);
+    } else {
+      this.renderer.selectedTiles.add(key);
+    }
+    this.renderer.markDirty();
+    this.callbacks.onTileSelectionChange?.(this.getSelectedTiles());
+  }
+
+  addTileSelectionRange(minTx: number, minTy: number, maxTx: number, maxTy: number): void {
+    for (let ty = minTy; ty <= maxTy; ty++) {
+      for (let tx = minTx; tx <= maxTx; tx++) {
+        this.renderer.selectedTiles.add(`${tx},${ty}`);
+      }
+    }
+    this.renderer.markDirty();
+    this.callbacks.onTileSelectionChange?.(this.getSelectedTiles());
+  }
+
+  clearSelectedTiles(): void {
+    this.renderer.selectedTiles.clear();
+    this.renderer.selectionMarquee = null;
+    this.renderer.markDirty();
+    this.callbacks.onTileSelectionChange?.([]);
   }
 
   destroy(): void {

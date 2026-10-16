@@ -11,11 +11,14 @@ import { Camera } from './Camera.js';
 import { CanvasRenderer } from './CanvasRenderer.js';
 import { StoredStroke } from './SpatialIndex.js';
 
-export type InteractionMode = 'draw' | 'move';
+export type InteractionMode = 'draw' | 'move' | 'select';
 
 export interface PointerCaptureCallbacks {
   onStrokeCommitted?: (stroke: StoredStroke) => void;
   onCameraChanged?: () => void;
+  onSelectionBoxChanged?: (box: { startX: number; startY: number; currentX: number; currentY: number } | null) => void;
+  onTileClicked?: (tileX: number, tileY: number) => void;
+  onTileRangeSelected?: (minTx: number, minTy: number, maxTx: number, maxTy: number) => void;
 }
 
 export class PointerCapture {
@@ -38,6 +41,10 @@ export class PointerCapture {
   private drawingPointerId: number | null = null;
   private currentRawPath: TilePosition[] = [];
   private nextLocalStrokeId = 1;
+
+  // Selection mode state
+  private selectionStart: { x: number; y: number } | null = null;
+  private selectionCurrent: { x: number; y: number } | null = null;
 
   constructor(
     element: HTMLElement,
@@ -128,6 +135,18 @@ export class PointerCapture {
     }
 
     if (this.activePointers.size === 1) {
+      if (this.mode === 'select') {
+        this.selectionStart = { x: e.clientX, y: e.clientY };
+        this.selectionCurrent = { x: e.clientX, y: e.clientY };
+        this.callbacks.onSelectionBoxChanged?.({
+          startX: e.clientX,
+          startY: e.clientY,
+          currentX: e.clientX,
+          currentY: e.clientY,
+        });
+        return;
+      }
+
       const isPanGesture =
         this.mode === 'move' ||
         this.isSpaceDown ||
@@ -191,8 +210,19 @@ export class PointerCapture {
       return;
     }
 
-    // 1-finger Move or Space-drag
+    // 1-finger Move, Space-drag, or Selection
     if (this.activePointers.size === 1) {
+      if (this.mode === 'select' && this.selectionStart) {
+        this.selectionCurrent = { x: e.clientX, y: e.clientY };
+        this.callbacks.onSelectionBoxChanged?.({
+          startX: this.selectionStart.x,
+          startY: this.selectionStart.y,
+          currentX: e.clientX,
+          currentY: e.clientY,
+        });
+        return;
+      }
+
       const isPan =
         this.mode === 'move' ||
         this.isSpaceDown ||
@@ -245,6 +275,41 @@ export class PointerCapture {
       this.element.releasePointerCapture(e.pointerId);
     } catch {
       // Ignore if pointer capture already released
+    }
+
+    if (this.mode === 'select' && this.selectionStart) {
+      const start = this.selectionStart;
+      const current = this.selectionCurrent || { x: e.clientX, y: e.clientY };
+      this.selectionStart = null;
+      this.selectionCurrent = null;
+      this.callbacks.onSelectionBoxChanged?.(null);
+
+      const dx = Math.abs(current.x - start.x);
+      const dy = Math.abs(current.y - start.y);
+
+      const viewport = this.renderer.getViewport();
+      if (dx < 6 && dy < 6) {
+        // Single tile click
+        const tp = screenToTilePosition(start.x, start.y, this.camera, viewport);
+        this.callbacks.onTileClicked?.(tp.tileX, tp.tileY);
+      } else {
+        // Drag selection range
+        const minX = Math.min(start.x, current.x);
+        const maxX = Math.max(start.x, current.x);
+        const minY = Math.min(start.y, current.y);
+        const maxY = Math.max(start.y, current.y);
+
+        const tp1 = screenToTilePosition(minX, minY, this.camera, viewport);
+        const tp2 = screenToTilePosition(maxX, maxY, this.camera, viewport);
+
+        const minTx = Math.min(tp1.tileX, tp2.tileX);
+        const maxTx = Math.max(tp1.tileX, tp2.tileX);
+        const minTy = Math.min(tp1.tileY, tp2.tileY);
+        const maxTy = Math.max(tp1.tileY, tp2.tileY);
+
+        this.callbacks.onTileRangeSelected?.(minTx, minTy, maxTx, maxTy);
+      }
+      return;
     }
 
     if (this.drawingPointerId === e.pointerId) {
